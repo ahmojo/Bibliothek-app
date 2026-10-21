@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "db:migrate": "node scripts/migrate.mjs",
-    "test:db": "node --test --test-concurrency=1 tests/migrations.test.mjs tests/media.test.mjs"
+    "test:db": "node --test --test-concurrency=1 tests/migrations.test.mjs tests/media.test.mjs tests/loans.test.mjs"
   },
   "dependencies": {
     "@next/env": "16.4.2",

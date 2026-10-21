@@ -70,6 +70,25 @@ Inventarnummer sind Textfelder, damit führende Nullen erhalten bleiben.
 Medienzuordnung sichern die Regeln direkt in PostgreSQL, auch bei Updates.
 Medien mit vorhandenen Exemplaren lassen sich nicht löschen.
 
+### Benutzer und Ausleihen
+
+`users` enthält `id`, `name`, `email`, `password_hash` und `role`. Alle Felder sind
+Pflicht; ein CHECK erlaubt nur `USER` und `ADMIN`. Ein UNIQUE-Index auf
+`LOWER(email)` macht E-Mails unabhängig von der Schreibweise eindeutig.
+
+`ausleihe` verbindet jeweils einen Benutzer und ein Exemplar über Fremdschlüssel.
+`loan_date` und `due_date` sind Pflichtdaten, `return_date` ist optional. Fälligkeit
+und Rückgabe dürfen nicht vor der Ausleihe liegen. `ON DELETE RESTRICT` schützt
+referenzierte Benutzer und Exemplare vor dem Löschen.
+
+Bei `return_date IS NULL` ist die Ausleihe aktiv. Ein partieller UNIQUE-Index auf
+`exemplar_id` erlaubt höchstens eine aktive Ausleihe pro Exemplar. Zurückgegebene
+Ausleihen bleiben als Historie in derselben Tabelle. Eine Historientabelle und
+eine `available`-Spalte sind unnötig: Verfügbarkeit ergibt sich aus aktiven Ausleihen.
+
+Die reguläre Frist beträgt 30 Tage; ihre Berechnung sowie Login und
+Passwort-Hashing folgen später.
+
 ### Migrationen
 
 Starte die Datenbank und führe `npm run db:migrate` aus. Der Runner lädt die
@@ -93,8 +112,11 @@ Die Reihenfolge ist:
 2. `002_create_cd_dvd.sql` legt CDs/DVDs mit eingeschränktem Medientyp an.
 3. `003_create_exemplar.sql` legt Exemplare und ihre Beziehungen an. Die beiden
    Medientabellen müssen dafür bereits existieren.
+4. `004_create_users.sql` ergänzt Benutzer, Rollenprüfung und den E-Mail-Index.
+5. `005_create_ausleihe.sql` ergänzt Ausleihen, Datumsprüfungen und den partiellen
+   UNIQUE-Index. Dafür müssen Benutzer und Exemplare bereits existieren.
 
-Alle drei werden mit `npm run db:migrate` ausgeführt. Bestehende Daten und
+Alle Migrationen werden mit `npm run db:migrate` ausgeführt. Bestehende Daten und
 `setup_check` bleiben erhalten.
 
 ## Technische Entscheidungen
@@ -111,17 +133,19 @@ Alle drei werden mit `npm run db:migrate` ausgeführt. Bestehende Daten und
 - `npm run lint` prüft den Code mit ESLint.
 - `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
 - `npm run test:db` prüft den Migration-Runner sowie das Speichern von Medien und
-  Exemplaren, Pflichtfelder, eindeutige Werte, Medientypen und Beziehungen.
+  Exemplaren, Benutzer, E-Mail-Eindeutigkeit, Rollen sowie aktive und historische
+  Ausleihen. Dazu gehören Pflichtfelder, Datumsregeln, Fremdschlüssel und Indizes.
   Die Tests verwenden eigene Schemas, räumen sie danach auf und prüfen, dass
   `setup_check` unverändert bleibt.
 - Datenbankprüfung: Startseite aufrufen und den angezeigten Text mit dem Eintrag
   in `setup_check` vergleichen.
 - Next.js stoppen: `Ctrl+C`. Datenbank stoppen: `docker compose down`.
 
-Zuletzt geprüft: alle 15 Datenbanktests, ESLint und Produktionsbuild erfolgreich.
+Zuletzt geprüft: alle 28 Datenbanktests, ESLint und Produktionsbuild erfolgreich.
 Der zweite Migrationslauf hat keine Dateien erneut ausgeführt.
 
 ## Entwicklungsstand
 
-Das Datenbankschema für Bücher, CDs/DVDs und Exemplare ist umgesetzt.
-Eine Verwaltung über API oder Oberfläche gibt es noch nicht.
+Das Datenbankschema für Medien, Exemplare, Benutzer und Ausleihen ist umgesetzt.
+Authentifizierung, Ausleihlogik sowie eine Verwaltung über API oder Oberfläche
+gibt es noch nicht.

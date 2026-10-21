@@ -39,6 +39,8 @@ test("Medien und Exemplare", async (t) => {
     "001_create_books.sql",
     "002_create_cd_dvd.sql",
     "003_create_exemplar.sql",
+    "004_create_users.sql",
+    "005_create_ausleihe.sql",
   ]);
 
   await t.test("Alle Tabellen haben die erwarteten Spalten und Primärschlüssel", async () => {
