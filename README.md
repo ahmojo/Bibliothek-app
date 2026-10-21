@@ -5,9 +5,7 @@ PostgreSQL 18 läuft lokal in Docker, die SQL-Abfragen laufen über `pg`.
 
 ## Voraussetzungen
 
-- Node.js und npm
-- Docker Desktop
-- Git
+Node.js mit npm, Docker Desktop und Git.
 
 ## Installation und Start
 
@@ -24,29 +22,15 @@ Danach kannst du die App unter http://localhost:3000 öffnen.
 
 ## Datenbank einrichten
 
-Mit diesem Befehl öffnest du die Datenbank:
-
-```bash
-docker compose exec db psql -U bibliothek_app -d bibliothek
-```
-
 Die Startseite zeigt eine Nachricht aus `setup_check` als Verbindungsprüfung.
-Die Migrationen richten die Tabelle ein und erhalten vorhandene Nachrichten.
+Die Daten im Docker-Volume `postgres_data` bleiben nach `docker compose down` erhalten.
 
-`lib/db.js` verwendet einen gemeinsamen `pg.Pool`, beim Entwickeln auch über
-Modul-Neuladungen hinweg. `server-only` verhindert Client-Imports des Datenbankcodes.
-Die Services in `lib/media.mjs`, `exemplars.mjs`, `users.mjs` und `covers.mjs`
-erhalten `db` als Parameter. Dadurch laufen dieselben Funktionen im Server und
-in isolierten Datenbanktests, ohne Next.js-Kontext. Route Handler prüfen HTTP-
-Eingaben und Berechtigungen. Mehrteilige Änderungen verwenden über `transaction()`
-in `lib/postgres.mjs` denselben Client, auch wenn ein Pool übergeben wurde.
-
-IDs bleiben überall BIGINT-Strings und werden über `lib/validation.mjs` geprüft.
-`lib/postgres.mjs` konfiguriert den DATE-Parser für App und Tests auf `YYYY-MM-DD`;
-die Bibliothekszeitzone ist `Europe/Zurich`. So entstehen keine Datumsverschiebungen.
-
-Die Daten liegen im Docker-Volume `postgres_data` und bleiben auch nach
-`docker compose down` erhalten.
+`lib/db.js` stellt den gemeinsamen, durch `server-only` geschützten Pool bereit.
+Services erhalten `db` als Parameter und bleiben so ohne Next.js-Kontext testbar.
+Route Handler prüfen HTTP-Eingaben und Berechtigungen; `transaction()` in
+`lib/postgres.mjs` hält zusammengehörige Änderungen auf demselben Client.
+BIGINT-IDs bleiben Strings, DATE-Werte `YYYY-MM-DD`. Die zentrale Validierung
+und Parser-Konfiguration verhindern Genauigkeitsverluste und Datumsverschiebungen.
 
 ### Medien und Exemplare
 
@@ -57,62 +41,40 @@ Die Daten liegen im Docker-Volume `postgres_data` und bleiben auch nach
   Zuordnung zu genau einem Buch oder einer CD/DVD. Ein Medium kann mehrere
   Exemplare haben.
 
-Alle Tabellen haben automatisch erzeugte `bigint`-Primärschlüssel. ISBN und
-Inventarnummer sind Textfelder, damit führende Nullen erhalten bleiben.
-PostgreSQL-Constraints sichern Pflichtfelder, Eindeutigkeit und Medienzuordnung.
-Medien mit vorhandenen Exemplaren lassen sich nicht löschen.
+PostgreSQL erzwingt nicht leere Pflichttexte, Eindeutigkeit und Fremdschlüssel.
+ISBN-10/13 werden auf ihre Prüfziffer geprüft und über die API ohne Bindestriche
+oder Leerzeichen gespeichert. Erscheinungsjahre liegen zwischen 1 und dem nächsten
+Kalenderjahr. Exemplare mit Ausleihhistorie dürfen keinem anderen Medium zugeordnet werden.
 
-Pflichttexte dürfen auch nicht leer oder nur Leerraum sein. ISBN-10 und ISBN-13
-werden auf ihre Prüfziffer geprüft; Bindestriche und Leerzeichen zählen für
-Suche und Eindeutigkeit nicht mit. Die Verwaltungs-API speichert ISBNs normalisiert;
-bereits vorhandene Werte werden nicht automatisch umgeschrieben.
-Erscheinungsjahre sind optional und liegen zwischen 1 und dem nächsten Kalenderjahr.
-Indizes auf den Fremdschlüsseln unterstützen Zuordnungen und Referenzprüfungen.
-Administratoren können Medien erstellen und bearbeiten sowie Inventarnummer,
-Standort und Medienzuordnung eines Exemplars ändern. Hat ein Exemplar bereits
-Ausleihen, wird eine andere Medienzuordnung mit 409 abgelehnt; die Historie bleibt erhalten.
-
-Cover liegen als Dateien unter `storage/covers/` (von Git ausgeschlossen).
-`COVER_UPLOAD_DIR` in `.env.local` kann ein anderes dauerhaftes Verzeichnis angeben.
-Sichere es zusammen mit der Datenbank. Beide Medientabellen speichern nur die
-Kennung in `cover_image_path`; öffentlich abrufbar ist `/api/covers/{Kennung}`.
-`sharp` 0.35.5 prüft und dekodiert JPG, PNG und WebP bis 5 MiB und 20 Megapixel.
-Bilder werden ohne Metadaten als WebP mit zufälliger UUID gespeichert; Dateiname
-und MIME-Angabe des Uploads werden nicht vertraut. Animierte Bilder sind nicht erlaubt.
-Bei DB-Fehlern wird die neue Datei entfernt, alte Cover erst nach erfolgreicher
-Änderung ersetzt oder gelöscht. Ein Prozessabsturz oder fehlende Löschrechte können
-verwaiste Dateien hinterlassen; Upload-Dateien werden nicht in den Build eingebunden.
+Cover liegen unter `storage/covers/` und sind von Git ausgeschlossen. Optional legt
+`COVER_UPLOAD_DIR` in `.env.local` ein anderes dauerhaftes Verzeichnis fest.
+Die Datenbank speichert nur `cover_image_path`; sichere Dateien und Datenbank gemeinsam.
+`sharp` 0.35.5 prüft den Bildinhalt: JPG, PNG oder WebP, maximal 5 MiB und 20 Megapixel,
+keine Animationen. Gespeichert wird WebP ohne Metadaten mit zufälligem Dateinamen.
+Fehlerhafte DB-Änderungen entfernen die neue Datei; alte Cover werden erst nach
+Erfolg gelöscht. Bei Abstürzen oder Löschfehlern können verwaiste Dateien bleiben.
 
 ### Benutzer und Ausleihen
 
-`users` enthält `id`, `name`, `email`, `password_hash` und `role`. Alle Felder sind
-Pflicht; ein CHECK erlaubt nur `USER` und `ADMIN`. Ein UNIQUE-Index auf
-`LOWER(email)` macht E-Mails unabhängig von der Schreibweise eindeutig.
-Die Admin-API erstellt, listet und bearbeitet Benutzer inklusive Rolle und optional
-neuem Passwort. Antworten enthalten ausschliesslich `id`, `name`, `email` und `role`.
-Die Datenbankwerte bleiben `USER` und `ADMIN`; spätere Oberflächen zeigen
-„Benutzer“ und „Administrator“.
+`users` speichert Name, E-Mail, Passwort-Hash und die Rolle `USER` oder `ADMIN`.
+E-Mails sind über `LOWER(email)` eindeutig; API-Antworten enthalten keine Hashes.
 
-`ausleihe` verbindet jeweils einen Benutzer und ein Exemplar über Fremdschlüssel.
-`loan_date` und `due_date` sind Pflichtdaten, `return_date` ist optional. Fälligkeit
-und Rückgabe dürfen nicht vor der Ausleihe liegen. `ON DELETE RESTRICT` schützt
-referenzierte Benutzer und Exemplare vor dem Löschen.
+`ausleihe` verbindet Benutzer und Exemplar. Der Server verwendet die Session-ID
+und das aktuelle Datum in `Europe/Zurich`; die Frist beträgt 30 Kalendertage.
+Eine Ausleihe ist aktiv, solange `return_date IS NULL`, und ab dem Tag nach der
+Fälligkeit überfällig. Fälligkeit und Rückgabe dürfen nicht vor der Ausleihe liegen.
 
-Bei `return_date IS NULL` ist die Ausleihe aktiv. Ein partieller UNIQUE-Index auf
-`exemplar_id` erlaubt höchstens eine aktive Ausleihe pro Exemplar. Zurückgegebene
-Ausleihen bleiben als Historie in derselben Tabelle. Eine Historientabelle und
-eine `available`-Spalte sind unnötig: Verfügbarkeit ergibt sich aus aktiven Ausleihen.
-
-Die reguläre Frist beträgt 30 Tage; ihre Berechnung folgt später.
+Ausleihen sperren das Exemplar in einer Transaktion. Der partielle UNIQUE-Index
+verhindert zusätzlich zwei aktive Ausleihen; Konflikte ergeben 409. Nur ADMIN darf
+zurückgeben: Ein bedingtes UPDATE setzt das Rückgabedatum genau einmal.
+Die Historie bleibt in derselben Tabelle, Verfügbarkeit wird aus aktiven Ausleihen
+berechnet. Zusätzliche Historientabellen oder Statusspalten sind deshalb unnötig.
 
 ### Anmeldung und ADMIN-Setup
 
-Die Anmeldung verwendet **NextAuth 4.24.15**, den stabilen Release mit Unterstützung
-für Next.js 16 und React 19. Der Credentials Provider prüft die vorhandene
-`users`-Tabelle; E-Mails werden getrimmt und kleingeschrieben. Passwörter werden mit
-**Argon2id** gespeichert (`argon2` 0.45.1, 64 MiB, drei Durchläufe, zufälliges Salt).
-Das speicherintensive Verfahren erschwert das Durchprobieren gestohlener Hashes.
-Passwörter und Hashes erscheinen weder in Sessions noch im Katalog.
+**NextAuth 4.24.15** verwendet den Credentials Provider mit der vorhandenen
+`users`-Tabelle. E-Mails werden getrimmt und kleingeschrieben. **Argon2id**
+(`argon2` 0.45.1, 64 MiB, drei Durchläufe) erschwert das Knacken gestohlener Hashes.
 
 Ergänze in der nicht versionierten `.env.local`:
 
@@ -120,26 +82,19 @@ Ergänze in der nicht versionierten `.env.local`:
 - `NEXTAUTH_SECRET`: zufälliges Geheimnis, beispielsweise erzeugt mit
   `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`.
 
-Mit **`npm run admin:create`** legst du nach den Migrationen das erste ADMIN-Konto
-an. Das Skript fragt Name, E-Mail und zweimal das verdeckte Passwort ab
-(12–50 Zeichen). Es verändert keine bestehenden Konten und verweigert die
-Einrichtung, sobald ein ADMIN existiert.
+Mit `npm run admin:create` legst du nach den Migrationen das erste ADMIN-Konto an.
+Das Skript fragt Name, E-Mail und das verdeckte Passwort ab (12–50 Zeichen).
+Bestehende Konten bleiben unverändert; sobald ein ADMIN existiert, stoppt das Skript.
 
 NextAuth stellt `/api/auth/csrf`, `/api/auth/callback/credentials`,
 `/api/auth/session` und `/api/auth/signout` bereit. Login und Logout erfolgen per
 POST mit CSRF-Token. Eine eigene Login-Seite gibt es noch nicht.
 
-Verschlüsselte JWT-Sessions laufen nach acht Stunden ab und benötigen keine neuen
-Datenbanktabellen. NextAuth setzt `HttpOnly` und `SameSite=Lax`, unter HTTPS auch
-`Secure`. `getCurrentUser()`, `requireUser()` und `requireAdmin()` in `lib/auth.js`
-sind für serverseitige Prüfungen gedacht. Jede Session-Abfrage lädt den Benutzer
-und seine Rolle frisch aus PostgreSQL; eine Herabstufung wird so bei der nächsten
-geschützten Aktion berücksichtigt. Fehlende Anmeldung ergibt 401, fehlende
+Verschlüsselte JWT-Sessions gelten acht Stunden und brauchen keine zusätzlichen
+Tabellen. Cookies sind `HttpOnly`, `SameSite=Lax` und unter HTTPS `Secure`.
+Die Prüfungen in `lib/auth.js` laden Benutzer und Rolle frisch aus PostgreSQL,
+damit Rollenänderungen sofort wirken. Fehlende Anmeldung ergibt 401, fehlende
 ADMIN-Berechtigung 403.
-
-Dokumentation: [NextAuth/App Router](https://next-auth.js.org/configuration/nextjs),
-[Credentials](https://next-auth.js.org/providers/credentials),
-[Argon2](https://github.com/ranisalt/node-argon2).
 
 ### Öffentlicher Katalog
 
@@ -148,20 +103,30 @@ Dokumentation: [NextAuth/App Router](https://next-auth.js.org/configuration/next
 | `GET /api/catalog` | Alle Medien mit Anzahl gesamter und verfügbarer Exemplare |
 | `GET /api/catalog/{type}/{id}` | Ein Medium mit paginierter Exemplarliste |
 
-Die Liste akzeptiert `type=all|book|cd|dvd` und `q` für Titel sowie bei Büchern
-Autor oder ISBN. Beispiel: `/api/catalog?type=book&q=roman&page=1&pageSize=20`.
-Der optionale Filter `isbn` erwartet eine vollständige ISBN mit gültiger Prüfziffer,
-etwa `?isbn=978-0-306-40615-7`; `q` bleibt eine freie Suche.
-`page` beginnt bei 1 (höchstens 10000), `pageSize` ist standardmässig 20 und
-höchstens 100. Beide Parameter gelten auch für die Exemplare der Detailabfrage.
-Die Suche ist auf 200 Zeichen begrenzt. IDs bleiben als `bigint`-Werte in JSON
-Strings, damit keine Genauigkeit verloren geht.
+Filter: `type=all|book|cd|dvd`, `q` für Titel, Autor oder ISBN (maximal 200 Zeichen)
+und `isbn` für eine vollständige gültige ISBN.
+Beispiel: `/api/catalog?type=book&q=roman&page=1&pageSize=20`.
 
-Listen liefern `{ items, total, page, pageSize }`; Medien enthalten
-`total_copies` und `available_copies`. Ein Exemplar ist verfügbar, wenn keine
-Ausleihe mit `return_date IS NULL` existiert. Die Antworten werden nicht gecacht
-und enthalten keine Ausleiherdaten. Validierungsfehler ergeben 400, unbekannte
-Medien 404, interne Fehler eine allgemeine JSON-Antwort mit 500.
+Alle Listen liefern `{ items, total, page, pageSize }`. `page` beginnt bei 1
+(maximal 10000), `pageSize` ist standardmässig 20 (maximal 100).
+Medien enthalten `total_copies` und `available_copies`; öffentliche Antworten
+enthalten keine Ausleiherdaten. Validierungsfehler ergeben 400, unbekannte
+Datensätze 404, interne Fehler eine allgemeine JSON-Antwort mit 500.
+
+### Ausleih-API
+
+| Endpunkt | Zweck |
+| --- | --- |
+| `POST /api/loans` | Angemeldet ein Exemplar ausleihen; JSON: `{ "exemplar_id": "1" }` |
+| `GET /api/loans` | Ausschliesslich eigene Ausleihen |
+| `GET /api/admin/loans` | Ausleihen aller Benutzer, nur ADMIN |
+| `POST /api/admin/loans/{id}/return` | Rückgabe erfassen, nur ADMIN; kein Anfrageinhalt nötig |
+
+Filter: `status=active|history|overdue`, Standard `active`. Aktive Listen sind nach
+Fälligkeit sortiert, zurückgegebene Ausleihen nach Rückgabedatum absteigend.
+Die Admin-Liste ergänzt Benutzername und E-Mail. Fremde Benutzer-IDs werden
+abgelehnt. Ausleihe ergibt 201, Rückgabe 200, nicht verfügbare Exemplare und
+wiederholte Rückgaben 409. Schreibanfragen brauchen den unten beschriebenen `Origin`.
 
 ### Verwaltungs-API
 
@@ -189,14 +154,12 @@ zu grosse Dateien 413 und nicht lesbare beziehungsweise unerlaubte Formate 415.
 
 ### Migrationen
 
-`npm run db:migrate` lädt `.env.local` über `@next/env` und führt SQL-Dateien aus
+`npm run db:migrate` lädt `.env.local` über `@next/env` und führt Dateien aus
 `migrations/` aufsteigend aus. `schema_migrations` verhindert Wiederholungen,
-eine Datenbanksperre parallele Läufe. Jede Datei samt Historieneintrag läuft in
-einer Transaktion; bei einem Fehler wird sie zurückgerollt und der Lauf stoppt.
-
-Neue Änderungen bekommen eine neue Datei mit dreistelliger, eindeutiger Nummer.
-Ausgeführte Dateien bleiben unverändert. SQL-Dateien dürfen keine eigenen
-Transaktionsbefehle enthalten und müssen innerhalb einer Transaktion ausführbar sein.
+eine Sperre parallele Läufe. Jede Datei samt Historieneintrag läuft in einer
+Transaktion; Fehler rollen sie zurück und stoppen den Lauf. Neue Änderungen
+erhalten neue Nummern. Ausgeführte Dateien bleiben unverändert; eigene
+Transaktionsbefehle gehören nicht in die SQL-Dateien.
 
 | Migration | Zweck |
 | --- | --- |
@@ -217,19 +180,14 @@ ab. Bestandsdaten werden weder automatisch korrigiert noch gelöscht.
 
 - `npm run lint` prüft den Code mit ESLint.
 - `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
-- `npm run test:backend` prüft Passwörter, Rollen, Katalog und Verwaltung sowie
-  ID-/DATE-Typen, Ausleihhistorien-Schutz und Cover inklusive Fehlerfällen und Dateipersistenz.
-- `npm run test:http` prüft nach dem Build Startseite, Login, CSRF, Sessions,
-  Logout, Katalog, Verwaltungsrechte und Cover-Uploads mit einem eigenen Produktionsserver.
+- `npm run test:backend` prüft Services, Datentypen, Cover und parallele Ausleihabläufe.
+- `npm run test:http` prüft nach dem Build die APIs inklusive Anmeldung und Berechtigungen.
 - `npm run test:db` prüft Migrationen, Constraints, Datenpersistenz und Cleanup.
 - Next.js stoppen: `Ctrl+C`. Datenbank stoppen: `docker compose down`.
 
-Die Tests verwenden isolierte Schemas ohne vorausgesetzte Tabellen in `public`
-und räumen auch nach Fehlern auf. Der HTTP-Test erzeugt ein eigenes Session-Geheimnis.
+Die Tests verwenden isolierte Schemas und räumen auch nach Fehlern auf.
 
 ## Entwicklungsstand
 
-Das Datenbankschema für Medien, Exemplare, Benutzer und Ausleihen ist umgesetzt.
-Passwortverarbeitung, NextAuth und die lesende Katalog-API sind umgesetzt.
-Die Admin-API verwaltet Medien, Cover, Exemplare und Benutzer.
-Login- und Admin-Oberflächen sowie Ausleih- und Rückgabelogik fehlen noch.
+Das Backend umfasst Anmeldung, Katalog, Verwaltung, Cover sowie Ausleihe und Rückgabe.
+Login-, Katalog- und Admin-Oberflächen fehlen noch.

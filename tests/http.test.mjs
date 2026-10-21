@@ -97,6 +97,9 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   }
 
   assert.deepEqual(await (await request("/api/auth/session")).json(), {});
+  for (const [url, method] of [["/api/loans", "GET"], ["/api/loans", "POST"], ["/api/admin/loans", "GET"], ["/api/admin/loans/1/return", "POST"]]) {
+    assert.equal((await request(url, { method })).status, 401);
+  }
   const writes = ["/api/admin/books", "/api/admin/cd-dvd", "/api/admin/exemplars", "/api/admin/users"];
   for (const url of writes) assert.equal((await request(url, { method: "POST" })).status, 401);
   assert.equal((await request(`/api/admin/media/book/${book.rows[0].id}/cover`, { method: "PUT" })).status, 401);
@@ -152,6 +155,50 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   const users = await usersResponse.json();
   assert.equal(users.items.length, 1);
   assert.equal(JSON.stringify(users).includes("password"), false);
+  const secondCopyResponse = await adminRequest("/api/admin/exemplars", { inventory_number: "LOAN-HTTP-2", location: "C", book_id: managedBook.id });
+  const secondCopy = await secondCopyResponse.json();
+  const borrowed = await adminRequest("/api/loans", { exemplar_id: copy.id });
+  assert.equal(borrowed.status, 201);
+  const adminLoan = await borrowed.json();
+  assert.equal(adminLoan.user_id, admin.id);
+  assert.equal((await (await request(`/api/catalog/book/${managedBook.id}`)).json()).available_copies, 1);
+  assert.equal((await login(managedUser.email, "Neues sicheres Passwort!")).status, 200);
+  assert.equal((await (await request("/api/loans")).json()).total, 0);
+  assert.equal((await request(`/api/loans?user_id=${admin.id}`)).status, 400);
+  assert.equal((await adminRequest("/api/loans", { exemplar_id: secondCopy.id, user_id: admin.id })).status, 400);
+  assert.equal((await adminRequest("/api/loans", { exemplar_id: secondCopy.id, due_date: "2099-01-01" })).status, 400);
+  assert.equal((await request("/api/loans", { method: "POST" })).status, 403);
+  assert.equal((await adminRequest("/api/loans", { exemplar_id: "abc" })).status, 400);
+  assert.equal((await adminRequest("/api/loans", { exemplar_id: "999999" })).status, 404);
+  assert.equal((await adminRequest("/api/loans", { exemplar_id: copy.id })).status, 409);
+  const attempts = await Promise.all([adminRequest("/api/loans", { exemplar_id: secondCopy.id }), adminRequest("/api/loans", { exemplar_id: secondCopy.id })]);
+  assert.deepEqual(attempts.map((response) => response.status).sort(), [201, 409]);
+  const userLoan = await attempts.find((response) => response.status === 201).json();
+  assert.equal(userLoan.user_id, managedUser.id);
+  const ownLoans = await (await request("/api/loans")).json();
+  assert.equal(ownLoans.total, 1);
+  assert.ok(ownLoans.items.every((loan) => loan.user_id === managedUser.id));
+  assert.equal("user_email" in ownLoans.items[0], false);
+  assert.equal((await request("/api/admin/loans")).status, 403);
+  assert.equal((await adminRequest(`/api/admin/loans/${userLoan.id}/return`)).status, 403);
+  await db.query("UPDATE ausleihe SET loan_date = CURRENT_DATE - 31, due_date = CURRENT_DATE - 1 WHERE id = $1", [userLoan.id]);
+  assert.equal((await (await request("/api/loans?status=overdue")).json()).total, 1);
+  assert.equal((await login("http@example.test", password)).status, 200);
+  assert.equal((await (await request("/api/admin/loans")).json()).total, 2);
+  const overdue = await (await request("/api/admin/loans?status=overdue")).json();
+  assert.equal(overdue.total, 1);
+  assert.equal(overdue.items[0].user_email, managedUser.email);
+  assert.equal(JSON.stringify(overdue).includes("password"), false);
+  const returned = await adminRequest(`/api/admin/loans/${userLoan.id}/return`);
+  assert.equal(returned.status, 200);
+  assert.match((await returned.json()).return_date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal((await adminRequest(`/api/admin/loans/${userLoan.id}/return`)).status, 409);
+  assert.equal((await adminRequest(`/api/admin/loans/${adminLoan.id}/return`)).status, 200);
+  assert.equal((await (await request("/api/admin/loans?status=history")).json()).total, 2);
+  assert.equal((await (await request("/api/loans?status=history")).json()).total, 1);
+  const borrowedAgain = await adminRequest("/api/loans", { exemplar_id: copy.id });
+  assert.equal(borrowedAgain.status, 201);
+  assert.equal((await adminRequest(`/api/admin/loans/${(await borrowedAgain.json()).id}/return`)).status, 200);
   async function upload(buffer, mime = "image/png") {
     const data = new FormData();
     data.set("file", new Blob([buffer], { type: mime }), "../../untrusted-name.png");
