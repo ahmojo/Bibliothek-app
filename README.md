@@ -1,35 +1,36 @@
 # Bibliotheksapp
 
-Next.js-Anwendung mit PostgreSQL als Datenbank, die lokal in Docker läuft.
+Die Bibliotheksapp entsteht mit Next.js, React und JavaScript.
+PostgreSQL 18 läuft lokal in Docker, die SQL-Abfragen laufen über `pg`.
 
 ## Voraussetzungen
 
 - Node.js und npm
 - Docker Desktop
 - Git
-- VS Code
 
 ## Installation und Start
-0. git clone https://github.com/ahmojo/Bibliothek-app.git
-1. Abhängigkeiten installieren: `npm ci`
-2. `.env.example` nach `.env` und `.env.local.example` nach `.env.local` kopieren und dasselbe Datenbankpasswort eintragen.
-3. PostgreSQL starten: `docker compose up -d`
-4. Bei der ersten Einrichtung die Testtabelle erstellen (siehe unten).
-5. Next.js starten: `npm run dev`
 
-Die Anwendung ist unter http://localhost:3000 erreichbar.
+1. Klone das Repository: `git clone https://github.com/ahmojo/Bibliothek-app.git`
+2. Wechsle in den Projektordner und installiere die Pakete mit `npm ci`.
+3. Kopiere `.env.example` nach `.env` und `.env.local.example` nach `.env.local`.
+   Trage in beiden Dateien dasselbe Datenbankpasswort ein. Über `DATABASE_URL`
+   verbindet sich die App mit der Datenbank.
+4. Starte PostgreSQL: `docker compose up -d`.
+5. Erstelle beim ersten Start die Testtabelle wie unten beschrieben.
+6. Starte Next.js: `npm run dev`.
 
-## Datenbank einrichten 
+Danach kannst du die App unter http://localhost:3000 öffnen.
 
-## Hier noch ein seed skript schreiben | later
+## Datenbank einrichten
 
-Datenbank öffnen:
+Mit diesem Befehl öffnest du die Datenbank:
 
 ```bash
 docker compose exec db psql -U bibliothek_app -d bibliothek
 ```
 
-Beim ersten Start ausführen:
+Lege dort einmalig die Testtabelle mit einem Eintrag an:
 
 ```sql
 CREATE TABLE setup_check (
@@ -41,44 +42,37 @@ INSERT INTO setup_check (message)
 VALUES ('Datenbankverbindung erfolgreich');
 ```
 
-Die Anwendung liest den gespeicherten Text serverseitig aus PostgreSQL und zeigt ihn auf der Startseite an.
+Die Startseite zeigt den Text aus `setup_check`. So lässt sich direkt sehen,
+ob die Datenbankanbindung funktioniert. Ist die Tabelle leer, erscheint
+`Keine Daten gefunden`.
+
+Der Datenbankzugriff liegt zentral in `lib/db.js`. Der `pg.Pool` verwendet
+Verbindungen wieder, und `pool.query()` gibt sie nach der Abfrage automatisch
+zurück. Beim Entwickeln bleibt der Pool über `globalThis` erhalten, wenn Next.js
+das Modul neu lädt. So entsteht nicht bei jeder Änderung ein neuer Pool.
+`server-only` sorgt dafür, dass der Datenbankcode auf dem Server bleibt.
+
+Die Daten liegen im Docker-Volume `postgres_data` und bleiben auch nach
+`docker compose down` erhalten.
+
+Für spätere Schemaänderungen sind nummerierte SQL-Dateien in `migrations/` geplant.
+`schema_migrations` soll festhalten, welche davon bereits ausgeführt wurden.
+Diese Dateien bleiben danach unverändert. Eingerichtet ist das noch nicht.
 
 ## Technische Entscheidungen
 
-- **JavaScript statt TypeScript:** Ich bin durch Python eher an dynamische Typisierung gewöhnt und arbeite lieber mit JavaScript. Für den aktuellen Projektumfang lohnt sich der zusätzliche TypeScript-Aufwand für mich nicht.
-- **App Router:** Für die Seitenstruktur und serverseitige Funktionen.
-- **ESLint:** Zur Überprüfung des Codes.
-- **CSS:** Für das Styling reicht normales CSS.
-- **npm:** Zur Verwaltung der Abhängigkeiten.
-- **pg:** Für direkte SQL-Abfragen ohne zusätzliches ORM.
+- **JavaScript und JSX:** passen zur bisherigen Erfahrung mit Python und reichen
+  für den aktuellen Projektumfang aus.
+- **App Router:** hält die Seiten und serverseitigen Funktionen zusammen.
+- **pg:** erlaubt direkte SQL-Abfragen ohne zusätzliches ORM.
+- **CSS:** normales CSS reicht für das Styling.
+- **npm und ESLint:** übernehmen Paketverwaltung und Codeprüfung.
 
-Dokumentation zu pg: https://node-postgres.com/
+## Prüfen und Stoppen
 
-## Verwendete Versionen
-
-- Next.js: 16.4.2
-- React: 19.2.0
-- React DOM: 19.2.0
-- PostgreSQL: 18
-- Node.js, Git und Docker: Versionen noch ergänzen
-
-## Codeprüfung
-
-- `npm run build` - Produktionsbuild erstellen.
-- `npm run lint` - Code mit ESLint prüfen.
-
-## Datenpersistenz
-
-Die Datenbank verwendet das Docker-Volume `postgres_data`.
-
-Ich habe den Container mit `docker compose down` entfernt und mit `docker compose up -d` neu gestartet. Der Testeintrag war danach weiterhin vorhanden.
-
-Die Daten bleiben somit auch nach einem Container-Neustart erhalten.
-
-## Projekt stoppen
-
-- Next.js: `Ctrl+C`
-- Datenbank: `docker compose down`
-
-## Fehlerbehebung
+- `npm run lint` prüft den Code mit ESLint.
+- `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
+- Datenbankprüfung: Startseite aufrufen und den angezeigten Text mit dem Eintrag
+  in `setup_check` vergleichen.
+- Next.js stoppen: `Ctrl+C`. Datenbank stoppen: `docker compose down`.
 
