@@ -33,6 +33,13 @@ test("Katalogsuche, Typen, Exemplare und Verfügbarkeit", async (t) => {
   }
   assert.equal((await search("q=%27%20OR%201%3D1--")).total, 0);
   assert.equal((await search("q=%25")).total, 0);
+  for (const q of ["-", "--", "- -"]) {
+    assert.equal((await search(`q=${encodeURIComponent(q)}`)).total, 0);
+  }
+  await db.query("UPDATE books SET title = 'Test-wald' WHERE id = $1", [books.rows[0].id]);
+  const hyphen = await search("q=-");
+  assert.equal(hyphen.total, 1);
+  assert.equal(hyphen.items[0].id, books.rows[0].id);
   assert.equal((await search("isbn=978-0-306-40615-7")).total, 1);
   assert.equal((await search("q=978-0-306-40615-7")).total, 1);
   const page1 = await search("pageSize=1");

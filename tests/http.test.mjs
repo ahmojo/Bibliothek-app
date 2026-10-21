@@ -7,6 +7,7 @@ import path from "node:path";
 import os from "node:os";
 import { mkdtemp, rm } from "node:fs/promises";
 import sharp from "sharp";
+import { encode } from "next-auth/jwt";
 import test from "node:test";
 import { createInitialAdmin } from "../lib/users.mjs";
 import { testDatabase } from "./helpers/database.mjs";
@@ -45,12 +46,13 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   await new Promise((resolve) => listener.close(resolve));
   const base = `http://127.0.0.1:${port}`;
   const root = path.resolve(import.meta.dirname, "..");
+  const secret = randomBytes(32).toString("base64");
   server = spawn(process.execPath, [path.join(root, "node_modules/next/dist/bin/next"), "start", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: root,
     windowsHide: true,
     env: {
       ...process.env, NODE_ENV: "production", NEXTAUTH_URL: base,
-      NEXTAUTH_SECRET: randomBytes(32).toString("base64"),
+      NEXTAUTH_SECRET: secret,
       PGOPTIONS: `-c search_path=${schema}`,
       COVER_UPLOAD_DIR: coversDirectory,
     },
@@ -71,7 +73,12 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   assert.ok(ready, `Testserver nicht bereit: ${output}`);
   const home = await fetch(base);
   assert.equal(home.status, 200);
-  assert.match(await home.text(), /Datenbankverbindung erfolgreich/);
+  assert.match(await home.text(), /Medienkatalog/);
+  for (const url of ["/admin", "/meine-ausleihen"]) {
+    const protectedPage = await fetch(base + url, { redirect: "manual" });
+    assert.equal(protectedPage.status, 307);
+    assert.equal(protectedPage.headers.get("location"), "/login");
+  }
 
   const cookies = new Map();
   async function request(url, options = {}) {
@@ -120,6 +127,10 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   assert.equal(session.user.id, admin.id);
   assert.equal(session.user.role, "ADMIN");
   assert.equal(JSON.stringify(session).includes("password"), false);
+  assert.equal((await request("/admin")).status, 200);
+  const unsafeReturn = await request("/login?next=%2F%2Ffremd.example");
+  assert.equal(unsafeReturn.status, 307);
+  assert.equal(unsafeReturn.headers.get("location"), "/admin");
   async function adminRequest(url, data, method = "POST") {
     return request(url, { method, headers: { Origin: base, "Content-Type": "application/json" }, body: JSON.stringify(data) });
   }
@@ -138,8 +149,21 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   const discResponse = await adminRequest("/api/admin/cd-dvd", { title: "Musik", media_type: "CD" });
   assert.equal(discResponse.status, 201);
   const disc = await discResponse.json();
-  assert.equal((await adminRequest(`/api/admin/cd-dvd/${disc.id}`, { media_type: "DVD" }, "PATCH")).status, 200);
+  assert.equal((await adminRequest(`/api/admin/cd-dvd/${disc.id}`, { title: "Musik bearbeitet" }, "PATCH")).status, 200);
   assert.equal((await request(`/api/admin/cd-dvd/${disc.id}`)).status, 200);
+  const dvdResponse = await adminRequest("/api/admin/cd-dvd", { title: "Testfilm", media_type: "DVD" });
+  assert.equal(dvdResponse.status, 201);
+  const dvd = await dvdResponse.json();
+  for (const [medium, type] of [[disc, "cd"], [dvd, "dvd"]]) {
+    const exemplar = await adminRequest("/api/admin/exemplars", { inventory_number: `HTTP-${type}`, location: "D", cd_dvd_id: medium.id });
+    assert.equal(exemplar.status, 201);
+    const catalogEntry = await (await request(`/api/catalog/${type}/${medium.id}`)).json();
+    assert.equal(catalogEntry.total_copies, 1);
+    assert.equal(catalogEntry.available_copies, 1);
+    const filtered = await (await request(`/api/catalog?type=${type}`)).json();
+    assert.equal(filtered.total, 1);
+    assert.equal(filtered.items[0].id, medium.id);
+  }
   const copyResponse = await adminRequest("/api/admin/exemplars", { inventory_number: "ADMIN-1", location: "A", book_id: managedBook.id });
   assert.equal(copyResponse.status, 201);
   const copy = await copyResponse.json();
@@ -163,6 +187,9 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   assert.equal(adminLoan.user_id, admin.id);
   assert.equal((await (await request(`/api/catalog/book/${managedBook.id}`)).json()).available_copies, 1);
   assert.equal((await login(managedUser.email, "Neues sicheres Passwort!")).status, 200);
+  const forbiddenPage = await request("/admin");
+  assert.equal(forbiddenPage.status, 307);
+  assert.equal(forbiddenPage.headers.get("location"), "/");
   assert.equal((await (await request("/api/loans")).json()).total, 0);
   assert.equal((await request(`/api/loans?user_id=${admin.id}`)).status, 400);
   assert.equal((await adminRequest("/api/loans", { exemplar_id: secondCopy.id, user_id: admin.id })).status, 400);
@@ -205,6 +232,20 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
     return request(`/api/admin/media/book/${managedBook.id}/cover`, { method: "PUT", headers: { Origin: base }, body: data });
   }
   const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "blue" } }).png().toBuffer();
+  for (const [medium, type] of [[disc, "cd"], [dvd, "dvd"]]) {
+    const form = new FormData();
+    form.set("file", new Blob([png], { type: "image/png" }), "cover.png");
+    const response = await request(`/api/admin/media/${type}/${medium.id}/cover`, { method: "PUT", headers: { Origin: base }, body: form });
+    assert.equal(response.status, 200);
+    const filename = (await response.json()).cover_image_path;
+    const detail = await (await request(`/api/catalog/${type}/${medium.id}`)).json();
+    assert.equal(detail.cover_image_path, filename);
+    const image = await request(`/api/covers/${filename}`);
+    assert.equal(image.status, 200);
+    const metadata = await sharp(Buffer.from(await image.arrayBuffer())).metadata();
+    assert.equal(metadata.format, "webp");
+    assert.equal(metadata.width, 2);
+  }
   assert.equal((await upload(Buffer.from("kein Bild"))).status, 415);
   assert.equal((await upload(Buffer.alloc(5 * 1024 * 1024 + 1))).status, 413);
   const uploaded = await upload(png, "text/plain");
@@ -225,6 +266,9 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
     assert.equal((await adminRequest(url, {}, "PATCH")).status, 403);
   }
   assert.equal((await request("/api/admin/users")).status, 403);
+  for (const url of [`/api/admin/books/${managedBook.id}`, `/api/admin/cd-dvd/${disc.id}`, `/api/admin/exemplars?book_id=${managedBook.id}`]) {
+    assert.equal((await request(url)).status, 403);
+  }
   assert.equal((await upload(png)).status, 403);
   assert.equal((await request(`/api/admin/media/book/${managedBook.id}/cover`, { method: "DELETE", headers: { Origin: base } })).status, 403);
 
@@ -237,6 +281,9 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   assert.deepEqual(await (await request("/api/auth/session")).json(), {});
   cookies.set("next-auth.session-token", "invalid-session");
   assert.deepEqual(await (await request("/api/auth/session")).json(), {});
+  cookies.set("next-auth.session-token", await encode({ token: { sub: admin.id }, secret, maxAge: -60 }));
+  assert.deepEqual(await (await request("/api/auth/session")).json(), {});
+  assert.equal((await request("/api/loans")).status, 401);
 
   const list = await request("/api/catalog?type=book&q=Testautor&pageSize=1");
   assert.equal(list.status, 200);
@@ -255,4 +302,10 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   }
   assert.equal((await request("/api/catalog/book/999999")).status, 404);
   assert.equal((await request("/api/catalog", { method: "POST" })).status, 405);
+  assert.equal((await (await request("/api/catalog?q=--")).json()).total, 0);
+  const deletedUser = await db.query("INSERT INTO users (name, email, password_hash, role) SELECT 'Sessionfixture', 'deleted@example.test', password_hash, 'USER' FROM users WHERE id = $1 RETURNING id", [managedUser.id]);
+  assert.equal((await login("deleted@example.test", "Neues sicheres Passwort!")).status, 200);
+  await db.query("DELETE FROM users WHERE id = $1", [deletedUser.rows[0].id]);
+  assert.equal((await (await request("/api/auth/session")).json()).user, null);
+  assert.equal((await request("/api/loans")).status, 401);
 });

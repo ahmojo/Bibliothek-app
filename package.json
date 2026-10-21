@@ -11,6 +11,8 @@
     "admin:create": "node --conditions=react-server scripts/create-admin.mjs",
     "test:backend": "node --conditions=react-server --test --test-concurrency=1 tests/security.test.mjs tests/catalog.test.mjs tests/management.test.mjs tests/covers.test.mjs tests/lending.test.mjs",
     "test:http": "node --conditions=react-server --test tests/http.test.mjs",
+    "test:frontend": "node --test tests/frontend.test.mjs",
+    "test:persistence": "node --conditions=react-server --test tests/persistence.test.mjs",
     "test:db": "node --test --test-concurrency=1 tests/migrations.test.mjs tests/media.test.mjs tests/loans.test.mjs tests/validation.test.mjs"
   },
   "dependencies": {

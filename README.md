@@ -1,11 +1,14 @@
 # Bibliotheksapp
 
-Die Bibliotheksapp entsteht mit Next.js, React und JavaScript.
+Die Bibliotheksapp entsteht mit Next.js 16.4.2, React 19.3.0 und JavaScript.
 PostgreSQL 18 läuft lokal in Docker, die SQL-Abfragen laufen über `pg`.
 
 ## Voraussetzungen
 
-Node.js mit npm, Docker Desktop und Git.
+Geprüfte Umgebung: Node.js 24.11.1, npm 11.6.2, Docker Engine 29.9.1
+(Docker Desktop mit Linux-Containern), PostgreSQL 18. Docker Desktop muss laufen.
+Git wird zum Klonen benötigt. `argon2` und `sharp` enthalten native Komponenten;
+die Installation muss zur verwendeten Node.js-Version und Plattform passen.
 
 ## Installation und Start
 
@@ -13,17 +16,41 @@ Node.js mit npm, Docker Desktop und Git.
 2. Wechsle in den Projektordner und installiere die Pakete mit `npm ci`.
 3. Kopiere `.env.example` nach `.env` und `.env.local.example` nach `.env.local`.
    Trage in beiden Dateien dasselbe Datenbankpasswort ein. Über `DATABASE_URL`
-   verbindet sich die App mit der Datenbank.
+   verbindet sich die App mit der Datenbank. Sonderzeichen im URL-Passwort müssen
+   URL-kodiert werden. Erzeuge auch `NEXTAUTH_SECRET` wie unten beschrieben.
 4. Starte PostgreSQL: `docker compose up -d`.
 5. Richte die Tabellen mit `npm run db:migrate` ein.
 6. Starte Next.js: `npm run dev`.
 
 Danach kannst du die App unter http://localhost:3000 öffnen.
 
+### Umgebungsvariablen
+
+| Variable | Verwendung |
+| --- | --- |
+| `POSTGRES_DB` | Datenbankname in `.env`, von Docker Compose bei der Initialisierung verwendet |
+| `POSTGRES_USER` | Initialer PostgreSQL-Benutzer in `.env` |
+| `POSTGRES_PASSWORD` | Eigenes Datenbankpasswort in `.env`; Platzhalter ersetzen |
+| `DATABASE_URL` | Verbindungs-URL in `.env.local`, auch für Migrationen, Admin-Setup und DB-Tests |
+| `NEXTAUTH_URL` | Exakte öffentliche Herkunft der App in `.env.local`; lokal `http://localhost:3000` |
+| `NEXTAUTH_SECRET` | Zufälliges dauerhaftes Session-Geheimnis in `.env.local` |
+| `COVER_UPLOAD_DIR` | Optionales dauerhaftes Cover-Verzeichnis in `.env.local`; leer bedeutet `storage/covers/` |
+
+`.env` und `.env.local` sind von Git ausgeschlossen; versioniert sind nur die
+Beispieldateien mit Platzhaltern. `PGOPTIONS` kann intern für ein isoliertes
+Testschema verwendet werden; die Bibliothekszeitzone setzt der App-Pool selbst.
+Bereits gesetzte Prozessvariablen haben Vorrang vor den Env-Dateien.
+
 ## Datenbank einrichten
 
-Die Startseite zeigt eine Nachricht aus `setup_check` als Verbindungsprüfung.
+Die Startseite zeigt den öffentlichen Medienkatalog. `setup_check` bleibt als
+technische Verbindungsprüfung in der Datenbank erhalten.
 Die Daten im Docker-Volume `postgres_data` bleiben nach `docker compose down` erhalten.
+PostgreSQL ist nur über `127.0.0.1:5432` veröffentlicht. Das Volume ist für
+PostgreSQL 18 unter `/var/lib/postgresql` eingebunden. `docker compose restart db`
+startet die Datenbank normal neu. `docker compose down -v` löscht das Volume und
+damit die Daten; diesen Befehl nicht für normales Stoppen verwenden.
+Änderungen an `POSTGRES_*` ändern keine Zugangsdaten in einem bereits initialisierten Volume.
 
 `lib/db.js` stellt den gemeinsamen, durch `server-only` geschützten Pool bereit.
 Services erhalten `db` als Parameter und bleiben so ohne Next.js-Kontext testbar.
@@ -88,7 +115,7 @@ Bestehende Konten bleiben unverändert; sobald ein ADMIN existiert, stoppt das S
 
 NextAuth stellt `/api/auth/csrf`, `/api/auth/callback/credentials`,
 `/api/auth/session` und `/api/auth/signout` bereit. Login und Logout erfolgen per
-POST mit CSRF-Token. Eine eigene Login-Seite gibt es noch nicht.
+POST mit CSRF-Token. Die Backend-Abnahme verwendet diese Endpunkte direkt.
 
 Verschlüsselte JWT-Sessions gelten acht Stunden und brauchen keine zusätzlichen
 Tabellen. Cookies sind `HttpOnly`, `SameSite=Lax` und unter HTTPS `Secure`.
@@ -175,6 +202,30 @@ Transaktionsbefehle gehören nicht in die SQL-Dateien.
 
 Die Validierungsmigrationen melden Datenkonflikte mit Datensatz-IDs und brechen
 ab. Bestandsdaten werden weder automatisch korrigiert noch gelöscht.
+Es gibt fünf fachliche Tabellen sowie die technischen Tabellen `setup_check`
+und `schema_migrations`. Das ER-Bild `../ER-diagrammV2.png` zeigt die fünf
+fachlichen Tabellen, enthält aber noch keine Coverfelder. Migration 009 ergänzt
+`cover_image_path` in beiden Medientabellen. Rollen werden als `USER`/`ADMIN`
+gespeichert. Das Ausleihdatum setzt die API; die SQL-Spalte hat keinen Default.
+
+## Frontend
+
+`app/` enthält Katalog, Login und minimale geschützte Seitenrahmen für eigene
+Ausleihen und Administration. Die vollständigen Ausleih- und Admin-Ansichten
+folgen später. `components/` bündelt Header, Formulare, Buttons, Statusanzeigen
+und den Detaildialog mit Tastaturfokus und Fokusrückgabe beim Schliessen.
+
+Tokens, Typografie, Responsive-Grenzen und Bewegungen stammen aus `../designV2.md`;
+die Wortmarke bleibt auf Wunsch ohne Punkt. Source Sans 3 liegt samt OFL-Lizenz
+lokal unter `app/fonts/`, damit der Build keinen Font-Server braucht. Abweichend
+von der TypeScript-Angabe im Design bleibt das Frontend gemäss aktuellem Auftrag
+in JavaScript/JSX; Rollenwerte bleiben `USER` und `ADMIN`.
+
+Katalog und Details laden die bestehenden `/api/catalog`-Endpunkte. Suche und
+Filter bleiben in der URL; echte Cover und Platzhalter werden unterstützt.
+Die Exemplarwahl löst noch keine Ausleihe aus. `/login` und Abmelden verwenden
+NextAuth. Ein optionales `next` akzeptiert nur interne Katalogpfade; sonst gilt
+das Ziel der Rolle. Geschützte Seiten prüfen Anmeldung und Rolle serverseitig.
 
 ## Prüfen und Stoppen
 
@@ -182,12 +233,63 @@ ab. Bestandsdaten werden weder automatisch korrigiert noch gelöscht.
 - `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
 - `npm run test:backend` prüft Services, Datentypen, Cover und parallele Ausleihabläufe.
 - `npm run test:http` prüft nach dem Build die APIs inklusive Anmeldung und Berechtigungen.
+- `npm run test:frontend` prüft sichere Rückkehrpfade und rollenabhängige Login-Ziele.
 - `npm run test:db` prüft Migrationen, Constraints, Datenpersistenz und Cleanup.
+- `npm run test:persistence` erstellt einen eigenen PostgreSQL-18-Container mit
+  eigenem Volume und zufälligem lokalen Port, migriert eine frische Datenbank,
+  vergleicht alle fünf Tabellen nach einem echten normalen Datenbankneustart und
+  entfernt ausschliesslich diese Testressourcen. Docker-Zugriff ist erforderlich.
 - Next.js stoppen: `Ctrl+C`. Datenbank stoppen: `docker compose down`.
 
-Die Tests verwenden isolierte Schemas und räumen auch nach Fehlern auf.
+`test:backend`, `test:db` und `test:http` verwenden UUID-basierte isolierte Schemas
+in der Datenbank aus `DATABASE_URL`. Der DB-Benutzer braucht dafür `CREATE SCHEMA`.
+Bestehende Entwicklungstabellen werden nicht geändert. Covertests nutzen eigene
+temporäre Verzeichnisse. Cleanup ist auch für Testfehler registriert; ein harter
+Prozessabbruch kann dennoch Testressourcen zurücklassen.
+
+Für die Abnahme eine eigene PostgreSQL-18-Testinstanz verwenden und deren URL
+explizit als Prozessvariable setzen, bevor diese Befehle ausgeführt werden:
+
+```text
+npm run lint
+npm run test:backend
+npm run test:db
+npm run build
+npm run test:http
+npm run test:persistence
+```
+
+`test:http` startet den gebauten Produktionsserver selbst auf einem freien
+Loopback-Port mit eigener NextAuth-Konfiguration. Ein laufender Entwicklungsserver
+wird dafür nicht benötigt. Der Persistenztest verwendet keine `DATABASE_URL`.
+Eine separate reine Unit-Test-Suite gibt es nicht; die Backend-Suite enthält
+sowohl isolierte Validierungs-/Hashingtests als auch Service-Integrationstests.
+Die bisherige Prüfung über eine neue DB-Verbindung ersetzt keinen Neustarttest.
 
 ## Entwicklungsstand
 
 Das Backend umfasst Anmeldung, Katalog, Verwaltung, Cover sowie Ausleihe und Rückgabe.
-Login-, Katalog- und Admin-Oberflächen fehlen noch.
+Die Backend-Abnahme bezieht sich auf den oben dokumentierten API-Stand.
+Während der Abnahme sind parallel Frontend-Seiten und Komponenten hinzugekommen;
+deren Fertigstellung und UI-Abnahme sind nicht Bestandteil dieses Berichts.
+Der erfolgreiche Produktionsbuild erfolgte vor diesen nachträglichen Änderungen
+und muss nach Abschluss der parallelen Arbeiten erneut ausgeführt werden.
+
+Die Vorgabe TypeScript aus `../designV2.md` ist noch nicht erfüllt; das Backend
+liegt weiterhin in JavaScript vor. Eine Sprachmigration ist in dieser reinen
+Abnahmestufe nicht erfolgt. Lösch-APIs für Medien, Exemplare und Benutzer sowie
+Passwortzurücksetzen sind nicht implementiert.
+
+Anmeldeversuche haben derzeit keine anwendungseigene Ratenbegrenzung. Änderungen
+von Passwörtern widerrufen bestehende JWTs nicht automatisch; Sessions gelten bis
+zum Ablauf oder Abmelden, die aktuelle Rolle wird weiterhin aus der DB gelesen.
+Die lokale Abnahme prüft HTTP; HTTPS, `Secure`-Cookies und Proxy-Konfiguration
+müssen in der Zielumgebung geprüft werden. Ein wiederhergestelltes Backup von
+Datenbank und Cover-Verzeichnis wurde hier nicht getestet.
+
+`npm audit` meldete am 21.10.2026 fünf als `high` eingestufte betroffene Pakete
+in der Entwicklungsabhängigkeitskette `eslint-config-next` →
+`@next/eslint-plugin-next` → `fast-glob` → `micromatch` → `braces`.
+Dies ist eine gemeinsame Schwachstellenkette (GHSA-vfj7-8cjw-p6xm), nicht fünf
+unabhängige Lücken. `npm audit --omit=dev` meldete null bekannte Befunde.
+Es wurde kein inkompatibler Downgrade der Next.js-Werkzeuge durchgeführt.

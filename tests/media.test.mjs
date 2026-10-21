@@ -22,6 +22,8 @@ test("Medien und Exemplare", async (t) => {
       books: ["id", "title", "author", "isbn", "publisher", "publication_year", "category", "description", "cover_image_path"],
       cd_dvd: ["id", "title", "media_type", "cover_image_path"],
       exemplar: ["id", "inventory_number", "location", "book_id", "cd_dvd_id"],
+      users: ["id", "name", "email", "password_hash", "role"],
+      ausleihe: ["id", "user_id", "exemplar_id", "loan_date", "due_date", "return_date"],
     };
     for (const [table, columns] of Object.entries(expected)) {
       const result = await client.query(

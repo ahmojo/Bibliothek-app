@@ -1,15 +1,17 @@
 
-import { getSetupMessage } from "@/lib/db";
+import { Suspense } from "react";
+import Catalog from "@/components/catalog";
+import { ActivityLine } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
-  const message = await getSetupMessage();
-
+export default function Home() {
   return (
-    <main>
-      <h1>Bibliotheksapp</h1>
-      <p>{message}</p>
+    <main className="page-container page-content" id="inhalt">
+      <h1>Medienkatalog</h1>
+      <Suspense fallback={<ActivityLine>Medien werden geladen …</ActivityLine>}>
+        <Catalog />
+      </Suspense>
     </main>
   );
 }
