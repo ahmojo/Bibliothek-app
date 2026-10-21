@@ -127,7 +127,15 @@ test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { time
   assert.equal(session.user.id, admin.id);
   assert.equal(session.user.role, "ADMIN");
   assert.equal(JSON.stringify(session).includes("password"), false);
-  assert.equal((await request("/admin")).status, 200);
+  const adminPage = await request("/admin");
+  assert.equal(adminPage.status, 200);
+  assert.match(await adminPage.text(), /Aktive Ausleihen/);
+  assert.match(await (await request("/admin?bereich=medien")).text(), /Medium hinzufügen/);
+  assert.match(await (await request("/admin?bereich=exemplare")).text(), /Exemplare/);
+  assert.match(await (await request("/admin?bereich=benutzer")).text(), /Benutzer hinzufügen/);
+  const myLoansPage = await request("/meine-ausleihen");
+  assert.equal(myLoansPage.status, 200);
+  assert.match(await myLoansPage.text(), /Aktive Ausleihen[\s\S]*Ausleihhistorie/);
   const unsafeReturn = await request("/login?next=%2F%2Ffremd.example");
   assert.equal(unsafeReturn.status, 307);
   assert.equal(unsafeReturn.headers.get("location"), "/admin");

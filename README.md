@@ -210,10 +210,9 @@ gespeichert. Das Ausleihdatum setzt die API; die SQL-Spalte hat keinen Default.
 
 ## Frontend
 
-`app/` enthält Katalog, Login und minimale geschützte Seitenrahmen für eigene
-Ausleihen und Administration. Die vollständigen Ausleih- und Admin-Ansichten
-folgen später. `components/` bündelt Header, Formulare, Buttons, Statusanzeigen
-und den Detaildialog mit Tastaturfokus und Fokusrückgabe beim Schliessen.
+`app/` enthält Katalog, Login, eigene Ausleihen und die geschützte Administration.
+`components/` bündelt gemeinsame Formulare, Statusanzeigen, responsive Tabellen
+und Dialoge mit Tastaturfokus. Tabellen werden mobil zu beschrifteten Zeilen.
 
 Tokens, Typografie, Responsive-Grenzen und Bewegungen stammen aus `../designV2.md`;
 die Wortmarke bleibt auf Wunsch ohne Punkt. Source Sans 3 liegt samt OFL-Lizenz
@@ -223,9 +222,36 @@ in JavaScript/JSX; Rollenwerte bleiben `USER` und `ADMIN`.
 
 Katalog und Details laden die bestehenden `/api/catalog`-Endpunkte. Suche und
 Filter bleiben in der URL; echte Cover und Platzhalter werden unterstützt.
-Die Exemplarwahl löst noch keine Ausleihe aus. `/login` und Abmelden verwenden
-NextAuth. Ein optionales `next` akzeptiert nur interne Katalogpfade; sonst gilt
-das Ziel der Rolle. Geschützte Seiten prüfen Anmeldung und Rolle serverseitig.
+Eine Ausleihe wird nach Exemplarwahl ausdrücklich über `POST /api/loans` bestätigt.
+Die Rückgabefrist kommt vom Server. Konflikte aktualisieren die Verfügbarkeit;
+bei unklarem Netzwerkresultat wird vor einem erneuten Versuch der Ausleihstatus
+geprüft. `/meine-ausleihen` lädt eigene aktive Ausleihen und Historie getrennt über
+`GET /api/loans?status=active|history`. Datumswerte bleiben Kalendertage; der Server
+liefert Überfälligkeit und den Schweizer Vergleichstag für „Heute fällig“.
+
+Die Administration startet mit aktiven Ausleihen und bietet Medien, Exemplare,
+Benutzer sowie Ausleihhistorie und überfällige Einträge. Der Medieneditor nutzt die vorhandenen
+`/api/admin/books`- und `/api/admin/cd-dvd`-Routen. Cover werden separat über
+`/api/admin/media/{type}/{id}/cover` hochgeladen, ersetzt oder entfernt. Scheitert
+nur der Upload, bleibt der Medieneintrag gespeichert und im Editor erhalten.
+
+Exemplare werden nach Medientyp und Medium ausgewählt. Die Medienauswahl unterstützt
+Suche und Blättern; die Exemplarliste verwendet `/api/admin/exemplars` mit genau
+einer Medienzuordnung. Inventarnummer und Standort sind bearbeitbar. Eine bestehende
+Ausleihhistorie schützt das Backend vor einem Wechsel zu einem anderen Medium.
+`/api/admin/users` verwaltet Name, E-Mail und Rolle. Ein maskiertes Passwort wird
+nur bei Neuanlage eingegeben; Änderungen am eigenen Konto aktualisieren die Sitzung.
+
+Rückgaben werden im Dialog mit Benutzer, Titel und Inventarnummer bestätigt und
+über `POST /api/admin/loans/{id}/return` erfasst. Erst die Serverantwort bestätigt
+den Erfolg; bei unklarem Ergebnis kann der Status geprüft werden. Listen und
+Katalog laden aktuelle Verfügbarkeit ohne dauerhaften Browsercache. Gemeinsame
+Tabellen, Dialoge und Formularfelder halten alle Verwaltungsbereiche einheitlich.
+
+`/login` und Abmelden verwenden NextAuth. Ein optionales `next` akzeptiert nur
+interne Katalogpfade; sonst gilt das Ziel der Rolle. Geschützte Seiten prüfen
+Anmeldung und Rolle serverseitig. Frontend und Backend verwenden dieselbe
+ISBN-Prüfung; weitere Geschäftsregeln bleiben im Backend.
 
 ## Prüfen und Stoppen
 
@@ -233,7 +259,7 @@ das Ziel der Rolle. Geschützte Seiten prüfen Anmeldung und Rolle serverseitig.
 - `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
 - `npm run test:backend` prüft Services, Datentypen, Cover und parallele Ausleihabläufe.
 - `npm run test:http` prüft nach dem Build die APIs inklusive Anmeldung und Berechtigungen.
-- `npm run test:frontend` prüft sichere Rückkehrpfade und rollenabhängige Login-Ziele.
+- `npm run test:frontend` prüft Rückkehrpfade, Login-Ziele, Datumsanzeigen und Statusprüfungen.
 - `npm run test:db` prüft Migrationen, Constraints, Datenpersistenz und Cleanup.
 - `npm run test:persistence` erstellt einen eigenen PostgreSQL-18-Container mit
   eigenem Volume und zufälligem lokalen Port, migriert eine frische Datenbank,
@@ -266,19 +292,10 @@ Eine separate reine Unit-Test-Suite gibt es nicht; die Backend-Suite enthält
 sowohl isolierte Validierungs-/Hashingtests als auch Service-Integrationstests.
 Die bisherige Prüfung über eine neue DB-Verbindung ersetzt keinen Neustarttest.
 
-## Entwicklungsstand
+## Bekannte Grenzen
 
-Das Backend umfasst Anmeldung, Katalog, Verwaltung, Cover sowie Ausleihe und Rückgabe.
-Die Backend-Abnahme bezieht sich auf den oben dokumentierten API-Stand.
-Während der Abnahme sind parallel Frontend-Seiten und Komponenten hinzugekommen;
-deren Fertigstellung und UI-Abnahme sind nicht Bestandteil dieses Berichts.
-Der erfolgreiche Produktionsbuild erfolgte vor diesen nachträglichen Änderungen
-und muss nach Abschluss der parallelen Arbeiten erneut ausgeführt werden.
-
-Die Vorgabe TypeScript aus `../designV2.md` ist noch nicht erfüllt; das Backend
-liegt weiterhin in JavaScript vor. Eine Sprachmigration ist in dieser reinen
-Abnahmestufe nicht erfolgt. Lösch-APIs für Medien, Exemplare und Benutzer sowie
-Passwortzurücksetzen sind nicht implementiert.
+Lösch-APIs für Medien, Exemplare und Benutzer sowie Passwortzurücksetzen sind
+nicht implementiert.
 
 Anmeldeversuche haben derzeit keine anwendungseigene Ratenbegrenzung. Änderungen
 von Passwörtern widerrufen bestehende JWTs nicht automatisch; Sessions gelten bis

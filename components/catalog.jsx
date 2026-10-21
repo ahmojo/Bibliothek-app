@@ -92,7 +92,7 @@ export default function Catalog() {
           <Pagination page={data.page} pageSize={data.pageSize} total={data.total} disabled={loading} onChange={(next) => update({ page: next })} />
         </>}
       </section>
-      {medium && (validDetail ? <MediaDetails key={medium} type={detailType} id={detailId} user={user} returnPath={returnPath} onClose={() => update({ medium: null })} /> : <div className="invalid-detail"><InlineAlert>Medium nicht gefunden.</InlineAlert><Button variant="secondary" onClick={() => update({ medium: null })}>Zurück zum Katalog</Button></div>)}
+      {medium && (validDetail ? <MediaDetails key={medium} type={detailType} id={detailId} user={user} returnPath={returnPath} onChanged={reload} onClose={() => update({ medium: null })} /> : <div className="invalid-detail"><InlineAlert>Medium nicht gefunden.</InlineAlert><Button variant="secondary" onClick={() => update({ medium: null })}>Zurück zum Katalog</Button></div>)}
     </>
   );
 }

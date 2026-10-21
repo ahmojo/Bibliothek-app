@@ -3,13 +3,15 @@
 import Link from "next/link";
 import { useState } from "react";
 import Dialog from "./dialog";
+import LoanConfirmation from "./loan-confirmation";
 import useApi from "./use-api";
 import { MediaCover, Availability, mediaLabels } from "./media";
 import { ActivityLine, Button, InlineAlert, Pagination, StatusText } from "./ui";
 
-export default function MediaDetails({ type, id, onClose, user, returnPath }) {
+export default function MediaDetails({ type, id, onClose, user, returnPath, onChanged }) {
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState("");
+  const [confirmation, setConfirmation] = useState(null);
   const { data, error, loading, reload } = useApi(`/api/catalog/${encodeURIComponent(type)}/${encodeURIComponent(id)}?page=${page}&pageSize=20`);
   const selected = data?.exemplars.find((copy) => copy.id === selectedId && copy.available);
   const fields = data?.type === "book" ? [
@@ -42,9 +44,11 @@ export default function MediaDetails({ type, id, onClose, user, returnPath }) {
         <Pagination label="Exemplarseiten" page={page} pageSize={20} total={data.total_copies} disabled={loading} onChange={(next) => { setPage(next); setSelectedId(""); }} />
         <div className="dialog-footer">
           {selected && <p className="metadata" role="status">Ausgewählt: {selected.inventory_number} · {selected.location}</p>}
+          {user && data.available_copies > 0 && <Button disabled={!selected || loading} onClick={() => setConfirmation({ medium: data, exemplar: selected })}>Exemplar ausleihen</Button>}
           {!user && data.available_copies > 0 && <Link className="button button--primary" href={`/login?next=${encodeURIComponent(returnPath)}`}>Anmelden, um auszuleihen</Link>}
         </div>
       </div>}
+      {confirmation && <LoanConfirmation medium={confirmation.medium} exemplar={confirmation.exemplar} onClose={() => { setConfirmation(null); setSelectedId(""); }} onChanged={() => { reload(); onChanged(); }} />}
     </Dialog>
   );
 }
