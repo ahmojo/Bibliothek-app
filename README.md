@@ -55,6 +55,21 @@ das Modul neu lädt. So entsteht nicht bei jeder Änderung ein neuer Pool.
 Die Daten liegen im Docker-Volume `postgres_data` und bleiben auch nach
 `docker compose down` erhalten.
 
+### Medien und Exemplare
+
+- `books` speichert Titel, Autor und eindeutige ISBN. Verlag, Erscheinungsjahr,
+  Kategorie und Beschreibung sind optional.
+- `cd_dvd` speichert Titel und Medientyp. Erlaubt sind nur `CD` und `DVD`.
+- `exemplar` speichert die eindeutige Inventarnummer, den Standort und die
+  Zuordnung zu genau einem Buch oder einer CD/DVD. Ein Medium kann mehrere
+  Exemplare haben.
+
+Alle Tabellen haben automatisch erzeugte `bigint`-Primärschlüssel. ISBN und
+Inventarnummer sind Textfelder, damit führende Nullen erhalten bleiben.
+`NOT NULL`, `UNIQUE`, Fremdschlüssel und ein `CHECK` für die eindeutige
+Medienzuordnung sichern die Regeln direkt in PostgreSQL, auch bei Updates.
+Medien mit vorhandenen Exemplaren lassen sich nicht löschen.
+
 ### Migrationen
 
 Starte die Datenbank und führe `npm run db:migrate` aus. Der Runner lädt die
@@ -72,8 +87,15 @@ Migrationen bleiben erhalten. Die SQL-Dateien enthalten keine eigenen
 Transaktionsbefehle und müssen innerhalb einer Transaktion ausführbar sein.
 Eine Datenbanksperre verhindert parallele Läufe.
 
-Noch gibt es keine fachlichen Migrationen. Ein erster Lauf legt nur
-`schema_migrations` an; die bestehende `setup_check`-Tabelle bleibt unverändert.
+Die Reihenfolge ist:
+
+1. `001_create_books.sql` legt die Bücher an.
+2. `002_create_cd_dvd.sql` legt CDs/DVDs mit eingeschränktem Medientyp an.
+3. `003_create_exemplar.sql` legt Exemplare und ihre Beziehungen an. Die beiden
+   Medientabellen müssen dafür bereits existieren.
+
+Alle drei werden mit `npm run db:migrate` ausgeführt. Bestehende Daten und
+`setup_check` bleiben erhalten.
 
 ## Technische Entscheidungen
 
@@ -88,10 +110,18 @@ Noch gibt es keine fachlichen Migrationen. Ein erster Lauf legt nur
 
 - `npm run lint` prüft den Code mit ESLint.
 - `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
-- `npm run test:db` prüft Reihenfolge, Wiederholbarkeit und Rollback gegen die
-  laufende Datenbank. Die Tests verwenden eigene Schemas, räumen sie danach auf
-  und prüfen, dass `setup_check` unverändert bleibt.
+- `npm run test:db` prüft den Migration-Runner sowie das Speichern von Medien und
+  Exemplaren, Pflichtfelder, eindeutige Werte, Medientypen und Beziehungen.
+  Die Tests verwenden eigene Schemas, räumen sie danach auf und prüfen, dass
+  `setup_check` unverändert bleibt.
 - Datenbankprüfung: Startseite aufrufen und den angezeigten Text mit dem Eintrag
   in `setup_check` vergleichen.
 - Next.js stoppen: `Ctrl+C`. Datenbank stoppen: `docker compose down`.
 
+Zuletzt geprüft: alle 15 Datenbanktests, ESLint und Produktionsbuild erfolgreich.
+Der zweite Migrationslauf hat keine Dateien erneut ausgeführt.
+
+## Entwicklungsstand
+
+Das Datenbankschema für Bücher, CDs/DVDs und Exemplare ist umgesetzt.
+Eine Verwaltung über API oder Oberfläche gibt es noch nicht.
