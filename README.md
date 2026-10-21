@@ -1,36 +1,84 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Bibliotheksapp
 
-## Getting Started
+Next.js-Anwendung mit PostgreSQL als Datenbank, die lokal in Docker läuft.
 
-First, run the development server:
+## Voraussetzungen
+
+- Node.js und npm
+- Docker Desktop
+- Git
+- VS Code
+
+## Installation und Start
+0. git clone https://github.com/ahmojo/Bibliothek-app.git
+1. Abhängigkeiten installieren: `npm ci`
+2. `.env.example` nach `.env` und `.env.local.example` nach `.env.local` kopieren und dasselbe Datenbankpasswort eintragen.
+3. PostgreSQL starten: `docker compose up -d`
+4. Bei der ersten Einrichtung die Testtabelle erstellen (siehe unten).
+5. Next.js starten: `npm run dev`
+
+Die Anwendung ist unter http://localhost:3000 erreichbar.
+
+## Datenbank einrichten 
+
+## Hier noch ein seed skript schreiben | later
+
+Datenbank öffnen:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+docker compose exec db psql -U bibliothek_app -d bibliothek
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Beim ersten Start ausführen:
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+```sql
+CREATE TABLE setup_check (
+  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  message text NOT NULL
+);
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+INSERT INTO setup_check (message)
+VALUES ('Datenbankverbindung erfolgreich');
+```
 
-## Learn More
+Die Anwendung liest den gespeicherten Text serverseitig aus PostgreSQL und zeigt ihn auf der Startseite an.
 
-To learn more about Next.js, take a look at the following resources:
+## Technische Entscheidungen
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **JavaScript statt TypeScript:** Ich bin durch Python eher an dynamische Typisierung gewöhnt und arbeite lieber mit JavaScript. Für den aktuellen Projektumfang lohnt sich der zusätzliche TypeScript-Aufwand für mich nicht.
+- **App Router:** Für die Seitenstruktur und serverseitige Funktionen.
+- **ESLint:** Zur Überprüfung des Codes.
+- **CSS:** Für das Styling reicht normales CSS.
+- **npm:** Zur Verwaltung der Abhängigkeiten.
+- **pg:** Für direkte SQL-Abfragen ohne zusätzliches ORM.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Dokumentation zu pg: https://node-postgres.com/
 
-## Deploy on Vercel
+## Verwendete Versionen
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Next.js: 16.4.2
+- React: 19.2.0
+- React DOM: 19.2.0
+- PostgreSQL: 18
+- Node.js, Git und Docker: Versionen noch ergänzen
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Codeprüfung
+
+- `npm run build` - Produktionsbuild erstellen.
+- `npm run lint` - Code mit ESLint prüfen.
+
+## Datenpersistenz
+
+Die Datenbank verwendet das Docker-Volume `postgres_data`.
+
+Ich habe den Container mit `docker compose down` entfernt und mit `docker compose up -d` neu gestartet. Der Testeintrag war danach weiterhin vorhanden.
+
+Die Daten bleiben somit auch nach einem Container-Neustart erhalten.
+
+## Projekt stoppen
+
+- Next.js: `Ctrl+C`
+- Datenbank: `docker compose down`
+
+## Fehlerbehebung
+
