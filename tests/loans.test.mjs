@@ -1,45 +1,23 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import path from "node:path";
 import test from "node:test";
-import nextEnv from "@next/env";
 import pg from "pg";
 import { runMigrations } from "../scripts/migrations.mjs";
+import { testDatabase, migrationsDirectory } from "./helpers/database.mjs";
 
-const projectDir = path.resolve(import.meta.dirname, "..");
-nextEnv.loadEnvConfig(projectDir);
 
 // Fester Hashwert als Testfixture; keine Passwortverarbeitung im Test.
 const passwordHash = "$2b$12$R9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ss7KIUgO2t0jWMUW";
 
 test("Benutzer und Ausleihen", async (t) => {
-  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-  await client.connect();
-  const schema = `loan_test_${randomUUID().replaceAll("-", "")}`;
-  let schemaCreated = false;
-  let before;
-  t.after(async () => {
-    try {
-      if (schemaCreated) {
-        await client.query("SET search_path TO public");
-        await client.query(`DROP SCHEMA "${schema}" CASCADE`);
-        const after = await client.query("SELECT * FROM public.setup_check ORDER BY id");
-        assert.deepEqual(after.rows, before.rows, "setup_check muss unverändert bleiben");
-      }
-    } finally {
-      await client.end();
-    }
-  });
-  before = await client.query("SELECT * FROM public.setup_check ORDER BY id");
-  await client.query(`CREATE SCHEMA "${schema}"`);
-  schemaCreated = true;
-  await client.query(`SET search_path TO "${schema}"`);
+  const { client, schema, applied } = await testDatabase(t);
 
-  const directory = path.join(projectDir, "migrations");
-  assert.deepEqual(await runMigrations(client, directory), [
+  const directory = migrationsDirectory;
+  const expected = [
     "001_create_books.sql", "002_create_cd_dvd.sql", "003_create_exemplar.sql",
     "004_create_users.sql", "005_create_ausleihe.sql",
-  ]);
+  ];
+  assert.deepEqual(applied.filter((filename) => expected.includes(filename)), expected);
+  assert.deepEqual(applied, [...applied].sort());
 
   const users = await client.query(
     `INSERT INTO users (name, email, password_hash, role)
@@ -50,7 +28,7 @@ test("Benutzer und Ausleihen", async (t) => {
   const userId = users.rows[0].id;
   const otherUserId = users.rows[1].id;
   const book = await client.query(
-    "INSERT INTO books (title, author, isbn) VALUES ('Testbuch', 'Autor', '9780000000001') RETURNING id",
+    "INSERT INTO books (title, author, isbn) VALUES ('Testbuch', 'Autor', '9780000000002') RETURNING id",
   );
   const copies = await client.query(
     `INSERT INTO exemplar (inventory_number, location, book_id)

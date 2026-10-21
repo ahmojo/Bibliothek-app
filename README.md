@@ -17,7 +17,7 @@ PostgreSQL 18 läuft lokal in Docker, die SQL-Abfragen laufen über `pg`.
    Trage in beiden Dateien dasselbe Datenbankpasswort ein. Über `DATABASE_URL`
    verbindet sich die App mit der Datenbank.
 4. Starte PostgreSQL: `docker compose up -d`.
-5. Erstelle beim ersten Start die Testtabelle wie unten beschrieben.
+5. Richte die Tabellen mit `npm run db:migrate` ein.
 6. Starte Next.js: `npm run dev`.
 
 Danach kannst du die App unter http://localhost:3000 öffnen.
@@ -30,27 +30,11 @@ Mit diesem Befehl öffnest du die Datenbank:
 docker compose exec db psql -U bibliothek_app -d bibliothek
 ```
 
-Lege dort einmalig die Testtabelle mit einem Eintrag an:
+Die Startseite zeigt eine Nachricht aus `setup_check` als Verbindungsprüfung.
+Die Migrationen richten die Tabelle ein und erhalten vorhandene Nachrichten.
 
-```sql
-CREATE TABLE setup_check (
-  id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  message text NOT NULL
-);
-
-INSERT INTO setup_check (message)
-VALUES ('Datenbankverbindung erfolgreich');
-```
-
-Die Startseite zeigt den Text aus `setup_check`. So lässt sich direkt sehen,
-ob die Datenbankanbindung funktioniert. Ist die Tabelle leer, erscheint
-`Keine Daten gefunden`.
-
-Der Datenbankzugriff liegt zentral in `lib/db.js`. Der `pg.Pool` verwendet
-Verbindungen wieder, und `pool.query()` gibt sie nach der Abfrage automatisch
-zurück. Beim Entwickeln bleibt der Pool über `globalThis` erhalten, wenn Next.js
-das Modul neu lädt. So entsteht nicht bei jeder Änderung ein neuer Pool.
-`server-only` sorgt dafür, dass der Datenbankcode auf dem Server bleibt.
+`lib/db.js` verwendet einen gemeinsamen `pg.Pool`, beim Entwickeln auch über
+Modul-Neuladungen hinweg. `server-only` verhindert Client-Imports des Datenbankcodes.
 
 Die Daten liegen im Docker-Volume `postgres_data` und bleiben auch nach
 `docker compose down` erhalten.
@@ -66,9 +50,14 @@ Die Daten liegen im Docker-Volume `postgres_data` und bleiben auch nach
 
 Alle Tabellen haben automatisch erzeugte `bigint`-Primärschlüssel. ISBN und
 Inventarnummer sind Textfelder, damit führende Nullen erhalten bleiben.
-`NOT NULL`, `UNIQUE`, Fremdschlüssel und ein `CHECK` für die eindeutige
-Medienzuordnung sichern die Regeln direkt in PostgreSQL, auch bei Updates.
+PostgreSQL-Constraints sichern Pflichtfelder, Eindeutigkeit und Medienzuordnung.
 Medien mit vorhandenen Exemplaren lassen sich nicht löschen.
+
+Pflichttexte dürfen auch nicht leer oder nur Leerraum sein. ISBN-10 und ISBN-13
+werden auf ihre Prüfziffer geprüft; Bindestriche und Leerzeichen zählen für
+Suche und Eindeutigkeit nicht mit. Gespeicherte ISBNs werden dabei nicht verändert.
+Erscheinungsjahre sind optional und liegen zwischen 1 und dem nächsten Kalenderjahr.
+Indizes auf den Fremdschlüsseln unterstützen Zuordnungen und Referenzprüfungen.
 
 ### Benutzer und Ausleihen
 
@@ -86,66 +75,106 @@ Bei `return_date IS NULL` ist die Ausleihe aktiv. Ein partieller UNIQUE-Index au
 Ausleihen bleiben als Historie in derselben Tabelle. Eine Historientabelle und
 eine `available`-Spalte sind unnötig: Verfügbarkeit ergibt sich aus aktiven Ausleihen.
 
-Die reguläre Frist beträgt 30 Tage; ihre Berechnung sowie Login und
-Passwort-Hashing folgen später.
+Die reguläre Frist beträgt 30 Tage; ihre Berechnung folgt später.
+
+### Anmeldung und ADMIN-Setup
+
+Die Anmeldung verwendet **NextAuth 4.24.15**, den stabilen Release mit Unterstützung
+für Next.js 16 und React 19. Der Credentials Provider prüft die vorhandene
+`users`-Tabelle; E-Mails werden getrimmt und kleingeschrieben. Passwörter werden mit
+**Argon2id** gespeichert (`argon2` 0.45.1, 64 MiB, drei Durchläufe, zufälliges Salt).
+Das speicherintensive Verfahren erschwert das Durchprobieren gestohlener Hashes.
+Passwörter und Hashes erscheinen weder in Sessions noch im Katalog.
+
+Ergänze in der nicht versionierten `.env.local`:
+
+- `NEXTAUTH_URL`: lokal `http://localhost:3000`, auf dem Server die öffentliche HTTPS-URL.
+- `NEXTAUTH_SECRET`: zufälliges Geheimnis, beispielsweise erzeugt mit
+  `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`.
+
+Mit **`npm run admin:create`** legst du nach den Migrationen das erste ADMIN-Konto
+an. Das Skript fragt Name, E-Mail und zweimal das verdeckte Passwort ab
+(12–50 Zeichen). Es verändert keine bestehenden Konten und verweigert die
+Einrichtung, sobald ein ADMIN existiert.
+
+NextAuth stellt `/api/auth/csrf`, `/api/auth/callback/credentials`,
+`/api/auth/session` und `/api/auth/signout` bereit. Login und Logout erfolgen per
+POST mit CSRF-Token. Eine eigene Login-Seite gibt es noch nicht.
+
+Verschlüsselte JWT-Sessions laufen nach acht Stunden ab und benötigen keine neuen
+Datenbanktabellen. NextAuth setzt `HttpOnly` und `SameSite=Lax`, unter HTTPS auch
+`Secure`. `getCurrentUser()`, `requireUser()` und `requireAdmin()` in `lib/auth.js`
+sind für serverseitige Prüfungen gedacht. Jede Session-Abfrage lädt den Benutzer
+und seine Rolle frisch aus PostgreSQL; eine Herabstufung wird so bei der nächsten
+geschützten Aktion berücksichtigt. Fehlende Anmeldung ergibt 401, fehlende
+ADMIN-Berechtigung 403.
+
+Dokumentation: [NextAuth/App Router](https://next-auth.js.org/configuration/nextjs),
+[Credentials](https://next-auth.js.org/providers/credentials),
+[Argon2](https://github.com/ranisalt/node-argon2).
+
+### Öffentlicher Katalog
+
+| Endpunkt | Antwort |
+| --- | --- |
+| `GET /api/catalog` | Alle Medien mit Anzahl gesamter und verfügbarer Exemplare |
+| `GET /api/catalog/{type}/{id}` | Ein Medium mit paginierter Exemplarliste |
+
+Die Liste akzeptiert `type=all|book|cd|dvd` und `q` für Titel sowie bei Büchern
+Autor oder ISBN. Beispiel: `/api/catalog?type=book&q=roman&page=1&pageSize=20`.
+Der optionale Filter `isbn` erwartet eine vollständige ISBN mit gültiger Prüfziffer,
+etwa `?isbn=978-0-306-40615-7`; `q` bleibt eine freie Suche.
+`page` beginnt bei 1 (höchstens 10000), `pageSize` ist standardmässig 20 und
+höchstens 100. Beide Parameter gelten auch für die Exemplare der Detailabfrage.
+Die Suche ist auf 200 Zeichen begrenzt. IDs bleiben als `bigint`-Werte in JSON
+Strings, damit keine Genauigkeit verloren geht.
+
+Listen liefern `{ items, total, page, pageSize }`; Medien enthalten
+`total_copies` und `available_copies`. Ein Exemplar ist verfügbar, wenn keine
+Ausleihe mit `return_date IS NULL` existiert. Die Antworten werden nicht gecacht
+und enthalten keine Ausleiherdaten. Validierungsfehler ergeben 400, unbekannte
+Medien 404, interne Fehler eine allgemeine JSON-Antwort mit 500.
 
 ### Migrationen
 
-Starte die Datenbank und führe `npm run db:migrate` aus. Der Runner lädt die
-Verbindungsdaten aus `.env.local` mit dem Next.js-Loader `@next/env`.
+`npm run db:migrate` lädt `.env.local` über `@next/env` und führt SQL-Dateien aus
+`migrations/` aufsteigend aus. `schema_migrations` verhindert Wiederholungen,
+eine Datenbanksperre parallele Läufe. Jede Datei samt Historieneintrag läuft in
+einer Transaktion; bei einem Fehler wird sie zurückgerollt und der Lauf stoppt.
 
-Schemaänderungen kommen als SQL-Dateien nach `migrations/`, zum Beispiel
-`001_create_books.sql`. Verwende dreistellige, eindeutige Nummern und beschreibende
-Namen. Der Runner arbeitet sie aufsteigend ab und merkt sich ausgeführte Dateien
-in `schema_migrations`. Bereits ausgeführte Dateien werden übersprungen und dürfen
-nicht mehr geändert oder umbenannt werden. Änderungen bekommen eine neue Datei.
+Neue Änderungen bekommen eine neue Datei mit dreistelliger, eindeutiger Nummer.
+Ausgeführte Dateien bleiben unverändert. SQL-Dateien dürfen keine eigenen
+Transaktionsbefehle enthalten und müssen innerhalb einer Transaktion ausführbar sein.
 
-Jede Datei und ihr Historieneintrag laufen in derselben Transaktion. Bei einem
-Fehler wird beides zurückgerollt und der Lauf stoppt; vorherige erfolgreiche
-Migrationen bleiben erhalten. Die SQL-Dateien enthalten keine eigenen
-Transaktionsbefehle und müssen innerhalb einer Transaktion ausführbar sein.
-Eine Datenbanksperre verhindert parallele Läufe.
+| Migration | Zweck |
+| --- | --- |
+| `001_create_books.sql` | Bücher |
+| `002_create_cd_dvd.sql` | CDs/DVDs |
+| `003_create_exemplar.sql` | Exemplare mit Medienzuordnung |
+| `004_create_users.sql` | Benutzer, Rollen und E-Mail-Eindeutigkeit |
+| `005_create_ausleihe.sql` | Ausleihen, Datumsregeln und höchstens eine aktive Ausleihe |
+| `006_create_setup_check.sql` | Verbindungsprüfung; Testnachricht nur bei leerer Tabelle |
+| `007_validate_media_and_users.sql` | Pflichttexte, ISBN-Prüfung, Erscheinungsjahre und Fremdschlüsselindizes |
+| `008_align_isbn_whitespace.sql` | Unicode-Leerzeichen wie in JavaScript behandeln und ISBN-Index erneuern |
 
-Die Reihenfolge ist:
-
-1. `001_create_books.sql` legt die Bücher an.
-2. `002_create_cd_dvd.sql` legt CDs/DVDs mit eingeschränktem Medientyp an.
-3. `003_create_exemplar.sql` legt Exemplare und ihre Beziehungen an. Die beiden
-   Medientabellen müssen dafür bereits existieren.
-4. `004_create_users.sql` ergänzt Benutzer, Rollenprüfung und den E-Mail-Index.
-5. `005_create_ausleihe.sql` ergänzt Ausleihen, Datumsprüfungen und den partiellen
-   UNIQUE-Index. Dafür müssen Benutzer und Exemplare bereits existieren.
-
-Alle Migrationen werden mit `npm run db:migrate` ausgeführt. Bestehende Daten und
-`setup_check` bleiben erhalten.
-
-## Technische Entscheidungen
-
-- **JavaScript und JSX:** passen zur bisherigen Erfahrung mit Python und reichen
-  für den aktuellen Projektumfang aus.
-- **App Router:** hält die Seiten und serverseitigen Funktionen zusammen.
-- **pg:** erlaubt direkte SQL-Abfragen ohne zusätzliches ORM.
-- **CSS:** normales CSS reicht für das Styling.
-- **npm und ESLint:** übernehmen Paketverwaltung und Codeprüfung.
+Die Validierungsmigrationen melden Datenkonflikte mit Datensatz-IDs und brechen
+ab. Bestandsdaten werden weder automatisch korrigiert noch gelöscht.
 
 ## Prüfen und Stoppen
 
 - `npm run lint` prüft den Code mit ESLint.
 - `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
-- `npm run test:db` prüft den Migration-Runner sowie das Speichern von Medien und
-  Exemplaren, Benutzer, E-Mail-Eindeutigkeit, Rollen sowie aktive und historische
-  Ausleihen. Dazu gehören Pflichtfelder, Datumsregeln, Fremdschlüssel und Indizes.
-  Die Tests verwenden eigene Schemas, räumen sie danach auf und prüfen, dass
-  `setup_check` unverändert bleibt.
-- Datenbankprüfung: Startseite aufrufen und den angezeigten Text mit dem Eintrag
-  in `setup_check` vergleichen.
+- `npm run test:backend` prüft Passwörter, ADMIN-Setup, Rollen und Katalogabfragen.
+- `npm run test:http` prüft nach dem Build Startseite, Login, CSRF, Sessions,
+  Logout und Katalog-Endpunkte mit einem eigenen Produktionsserver.
+- `npm run test:db` prüft Migrationen, Constraints, Datenpersistenz und Cleanup.
 - Next.js stoppen: `Ctrl+C`. Datenbank stoppen: `docker compose down`.
 
-Zuletzt geprüft: alle 28 Datenbanktests, ESLint und Produktionsbuild erfolgreich.
-Der zweite Migrationslauf hat keine Dateien erneut ausgeführt.
+Die Tests verwenden isolierte Schemas ohne vorausgesetzte Tabellen in `public`
+und räumen auch nach Fehlern auf. Der HTTP-Test erzeugt ein eigenes Session-Geheimnis.
 
 ## Entwicklungsstand
 
 Das Datenbankschema für Medien, Exemplare, Benutzer und Ausleihen ist umgesetzt.
-Authentifizierung, Ausleihlogik sowie eine Verwaltung über API oder Oberfläche
-gibt es noch nicht.
+Passwortverarbeitung, NextAuth und die lesende Katalog-API sind umgesetzt.
+Login-Oberfläche, Medienverwaltung sowie Ausleih- und Rückgabelogik fehlen noch.

@@ -1,40 +1,23 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import nextEnv from "@next/env";
 import pg from "pg";
 import { runMigrations } from "../scripts/migrations.mjs";
-
-const projectDir = path.resolve(import.meta.dirname, "..");
-nextEnv.loadEnvConfig(projectDir);
+import { testDatabase } from "./helpers/database.mjs";
 
 async function prepareTest(t) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "bibliothek-migrations-"));
-  const schema = `migration_test_${randomUUID().replaceAll("-", "")}`;
-  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-  await client.connect();
-  const before = await client.query("SELECT * FROM public.setup_check ORDER BY id");
-
+  let directory;
   t.after(async () => {
-    try {
-      await client.query("ROLLBACK");
-      await client.query("SET search_path TO public");
-      await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
-      const after = await client.query("SELECT * FROM public.setup_check ORDER BY id");
-      assert.deepEqual(after.rows, before.rows, "setup_check muss unverändert bleiben");
-    } finally {
-      await client.end();
+    if (directory) {
       const tempRoot = path.resolve(os.tmpdir()) + path.sep;
       assert.ok(path.resolve(directory).startsWith(tempRoot));
       await rm(directory, { recursive: true, force: true });
     }
   });
-
-  await client.query(`CREATE SCHEMA "${schema}"`);
-  await client.query(`SET search_path TO "${schema}"`);
+  directory = await mkdtemp(path.join(os.tmpdir(), "bibliothek-migrations-"));
+  const { client } = await testDatabase(t, { migrate: false });
   return { client, directory };
 }
 
@@ -105,8 +88,8 @@ test("Parallele Läufe wenden dieselbe Migration nur einmal an", async (t) => {
   const schemaResult = await client.query("SELECT current_schema() AS name");
   const schema = schemaResult.rows[0].name;
   const secondClient = new pg.Client({ connectionString: process.env.DATABASE_URL });
-  await secondClient.connect();
   t.after(() => secondClient.end());
+  await secondClient.connect();
   await secondClient.query(`SET search_path TO "${schema}"`);
   await writeFile(path.join(directory, "001_create_probe.sql"), `
     SELECT pg_sleep(0.1);

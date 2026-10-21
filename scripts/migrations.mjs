@@ -56,7 +56,8 @@ export async function runMigrations(client, directory) {
         applied.push(filename);
       } catch (error) {
         await client.query("ROLLBACK");
-        throw new Error(`Migration ${filename} fehlgeschlagen (${error.code || "SQL-Fehler"}).`, {
+        const detail = error.code === "P0001" ? ` ${error.message}\n${error.detail || ""}` : "";
+        throw new Error(`Migration ${filename} fehlgeschlagen (${error.code || "SQL-Fehler"}).${detail}`, {
           cause: error,
         });
       }

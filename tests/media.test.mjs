@@ -1,47 +1,21 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
-import path from "node:path";
 import test from "node:test";
-import nextEnv from "@next/env";
-import pg from "pg";
 import { runMigrations } from "../scripts/migrations.mjs";
-
-const projectDir = path.resolve(import.meta.dirname, "..");
-nextEnv.loadEnvConfig(projectDir);
+import { testDatabase, migrationsDirectory } from "./helpers/database.mjs";
 
 test("Medien und Exemplare", async (t) => {
-  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-  await client.connect();
+  const { client, schema, applied } = await testDatabase(t);
 
-  const schema = `media_test_${randomUUID().replaceAll("-", "")}`;
-  let schemaCreated = false;
-  let before;
-  t.after(async () => {
-    try {
-      if (schemaCreated) {
-        await client.query("SET search_path TO public");
-        await client.query(`DROP SCHEMA "${schema}" CASCADE`);
-        const after = await client.query("SELECT * FROM public.setup_check ORDER BY id");
-        assert.deepEqual(after.rows, before.rows, "setup_check muss unverändert bleiben");
-      }
-    } finally {
-      await client.end();
-    }
-  });
-  before = await client.query("SELECT * FROM public.setup_check ORDER BY id");
-  await client.query(`CREATE SCHEMA "${schema}"`);
-  schemaCreated = true;
-  await client.query(`SET search_path TO "${schema}"`);
-
-  const directory = path.join(projectDir, "migrations");
-  const applied = await runMigrations(client, directory);
-  assert.deepEqual(applied, [
+  const directory = migrationsDirectory;
+  const expected = [
     "001_create_books.sql",
     "002_create_cd_dvd.sql",
     "003_create_exemplar.sql",
     "004_create_users.sql",
     "005_create_ausleihe.sql",
-  ]);
+  ];
+  assert.deepEqual(applied.filter((filename) => expected.includes(filename)), expected);
+  assert.deepEqual(applied, [...applied].sort());
 
   await t.test("Alle Tabellen haben die erwarteten Spalten und Primärschlüssel", async () => {
     const expected = {
@@ -71,10 +45,10 @@ test("Medien und Exemplare", async (t) => {
   await t.test("Bücher speichern Pflichtfelder und optionale Angaben", async () => {
     const minimal = await client.query(
       "INSERT INTO books (title, author, isbn) VALUES ($1, $2, $3) RETURNING *",
-      ["Ein Buch", "Eine Autorin", "0012345678901"],
+      ["Ein Buch", "Eine Autorin", "0306406152"],
     );
     assert.ok(minimal.rows[0].id);
-    assert.equal(minimal.rows[0].isbn, "0012345678901");
+    assert.equal(minimal.rows[0].isbn, "0306406152");
     for (const field of ["publisher", "publication_year", "category", "description"]) {
       assert.equal(minimal.rows[0][field], null);
     }
@@ -82,7 +56,7 @@ test("Medien und Exemplare", async (t) => {
     const full = await client.query(
       `INSERT INTO books (title, author, isbn, publisher, publication_year, category, description)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      ["Weiteres Buch", "Ein Autor", "0012345678902", "Testverlag", 2026, "Roman", "Beschreibung"],
+      ["Weiteres Buch", "Ein Autor", "9780132350884", "Testverlag", 2026, "Roman", "Beschreibung"],
     );
     assert.equal(full.rows[0].publication_year, 2026);
     assert.equal(full.rows[0].publisher, "Testverlag");
@@ -100,7 +74,7 @@ test("Medien und Exemplare", async (t) => {
       );
     }
     await assert.rejects(
-      client.query("INSERT INTO books (title, author, isbn) VALUES ('Duplikat', 'Autor', '0012345678901')"),
+      client.query("INSERT INTO books (title, author, isbn) VALUES ('Duplikat', 'Autor', '0306406152')"),
       { code: "23505" },
     );
     await assert.rejects(client.query("INSERT INTO cd_dvd (title, media_type) VALUES (NULL, 'CD')"),
@@ -122,7 +96,7 @@ test("Medien und Exemplare", async (t) => {
     }
   });
 
-  const book = await client.query("SELECT id FROM books WHERE isbn = '0012345678901'");
+  const book = await client.query("SELECT id FROM books WHERE isbn = '0306406152'");
   const disc = await client.query("SELECT id FROM cd_dvd WHERE media_type = 'CD'");
   const bookId = book.rows[0].id;
   const discId = disc.rows[0].id;
