@@ -6,9 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:migrate": "node scripts/migrate.mjs",
+    "test:db": "node --test --test-concurrency=1 tests/migrations.test.mjs"
   },
   "dependencies": {
+    "@next/env": "16.4.2",
     "next": "16.4.2",
     "pg": "^8.23.1",
     "react": "19.3.0",

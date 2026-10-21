@@ -55,9 +55,25 @@ das Modul neu lädt. So entsteht nicht bei jeder Änderung ein neuer Pool.
 Die Daten liegen im Docker-Volume `postgres_data` und bleiben auch nach
 `docker compose down` erhalten.
 
-Für spätere Schemaänderungen sind nummerierte SQL-Dateien in `migrations/` geplant.
-`schema_migrations` soll festhalten, welche davon bereits ausgeführt wurden.
-Diese Dateien bleiben danach unverändert. Eingerichtet ist das noch nicht.
+### Migrationen
+
+Starte die Datenbank und führe `npm run db:migrate` aus. Der Runner lädt die
+Verbindungsdaten aus `.env.local` mit dem Next.js-Loader `@next/env`.
+
+Schemaänderungen kommen als SQL-Dateien nach `migrations/`, zum Beispiel
+`001_create_books.sql`. Verwende dreistellige, eindeutige Nummern und beschreibende
+Namen. Der Runner arbeitet sie aufsteigend ab und merkt sich ausgeführte Dateien
+in `schema_migrations`. Bereits ausgeführte Dateien werden übersprungen und dürfen
+nicht mehr geändert oder umbenannt werden. Änderungen bekommen eine neue Datei.
+
+Jede Datei und ihr Historieneintrag laufen in derselben Transaktion. Bei einem
+Fehler wird beides zurückgerollt und der Lauf stoppt; vorherige erfolgreiche
+Migrationen bleiben erhalten. Die SQL-Dateien enthalten keine eigenen
+Transaktionsbefehle und müssen innerhalb einer Transaktion ausführbar sein.
+Eine Datenbanksperre verhindert parallele Läufe.
+
+Noch gibt es keine fachlichen Migrationen. Ein erster Lauf legt nur
+`schema_migrations` an; die bestehende `setup_check`-Tabelle bleibt unverändert.
 
 ## Technische Entscheidungen
 
@@ -72,6 +88,9 @@ Diese Dateien bleiben danach unverändert. Eingerichtet ist das noch nicht.
 
 - `npm run lint` prüft den Code mit ESLint.
 - `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
+- `npm run test:db` prüft Reihenfolge, Wiederholbarkeit und Rollback gegen die
+  laufende Datenbank. Die Tests verwenden eigene Schemas, räumen sie danach auf
+  und prüfen, dass `setup_check` unverändert bleibt.
 - Datenbankprüfung: Startseite aufrufen und den angezeigten Text mit dem Eintrag
   in `setup_check` vergleichen.
 - Next.js stoppen: `Ctrl+C`. Datenbank stoppen: `docker compose down`.
