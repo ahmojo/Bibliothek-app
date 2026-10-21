@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import nextEnv from "@next/env";
 import pg from "pg";
+import { LIBRARY_TIME_ZONE } from "../../lib/postgres.mjs";
 import { runMigrations } from "../../scripts/migrations.mjs";
 
 nextEnv.loadEnvConfig(path.resolve(import.meta.dirname, "../.."));
@@ -10,10 +11,10 @@ export const migrationsDirectory = path.resolve(import.meta.dirname, "../../migr
 export async function testDatabase(t, options = {}) {
   const schema = `backend_test_${randomUUID().replaceAll("-", "")}`;
   const connectionString = options.connectionString || process.env.DATABASE_URL;
-  const client = new pg.Client({ connectionString, connectionTimeoutMillis: 5000, application_name: schema });
+  const client = new pg.Client({ connectionString, options: `-c timezone=${LIBRARY_TIME_ZONE}`, connectionTimeoutMillis: 5000, application_name: schema });
   const db = new pg.Pool({
     connectionString,
-    options: `-c search_path=${schema}`,
+    options: `-c search_path=${schema} -c timezone=${LIBRARY_TIME_ZONE}`,
     application_name: schema,
     connectionTimeoutMillis: 5000,
     max: 4,

@@ -19,8 +19,8 @@ test("Medien und Exemplare", async (t) => {
 
   await t.test("Alle Tabellen haben die erwarteten Spalten und Primärschlüssel", async () => {
     const expected = {
-      books: ["id", "title", "author", "isbn", "publisher", "publication_year", "category", "description"],
-      cd_dvd: ["id", "title", "media_type"],
+      books: ["id", "title", "author", "isbn", "publisher", "publication_year", "category", "description", "cover_image_path"],
+      cd_dvd: ["id", "title", "media_type", "cover_image_path"],
       exemplar: ["id", "inventory_number", "location", "book_id", "cd_dvd_id"],
     };
     for (const [table, columns] of Object.entries(expected)) {

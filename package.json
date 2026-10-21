@@ -9,7 +9,7 @@
     "lint": "eslint",
     "db:migrate": "node scripts/migrate.mjs",
     "admin:create": "node --conditions=react-server scripts/create-admin.mjs",
-    "test:backend": "node --conditions=react-server --test --test-concurrency=1 tests/security.test.mjs tests/catalog.test.mjs",
+    "test:backend": "node --conditions=react-server --test --test-concurrency=1 tests/security.test.mjs tests/catalog.test.mjs tests/management.test.mjs tests/covers.test.mjs",
     "test:http": "node --conditions=react-server --test tests/http.test.mjs",
     "test:db": "node --test --test-concurrency=1 tests/migrations.test.mjs tests/media.test.mjs tests/loans.test.mjs tests/validation.test.mjs"
   },
@@ -21,7 +21,8 @@
     "pg": "^8.23.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "server-only": "0.0.1"
+    "server-only": "0.0.1",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "eslint": "^9",

@@ -4,19 +4,28 @@ import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import net from "node:net";
 import path from "node:path";
+import os from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
+import sharp from "sharp";
 import test from "node:test";
 import { createInitialAdmin } from "../lib/users.mjs";
 import { testDatabase } from "./helpers/database.mjs";
 
-test("Produktionsserver: NextAuth-Login, Session, Logout und öffentliche Katalog-API", { timeout: 60000 }, async (t) => {
+test("Produktionsserver: Anmeldung, Katalog, Admin-Verwaltung und Cover", { timeout: 60000 }, async (t) => {
   let server;
+  let coversDirectory;
   t.after(async () => {
     if (server && server.exitCode === null) {
       const exited = once(server, "exit");
       server.kill();
       await exited;
     }
+    if (coversDirectory) {
+      assert.ok(coversDirectory.startsWith(path.resolve(os.tmpdir()) + path.sep));
+      await rm(coversDirectory, { recursive: true, force: true });
+    }
   });
+  coversDirectory = await mkdtemp(path.join(os.tmpdir(), "bibliothek-http-covers-"));
   const { db, schema } = await testDatabase(t);
   const password = "Nur ein isoliertes Testpasswort 123!";
   const client = await db.connect();
@@ -43,6 +52,7 @@ test("Produktionsserver: NextAuth-Login, Session, Logout und öffentliche Katalo
       ...process.env, NODE_ENV: "production", NEXTAUTH_URL: base,
       NEXTAUTH_SECRET: randomBytes(32).toString("base64"),
       PGOPTIONS: `-c search_path=${schema}`,
+      COVER_UPLOAD_DIR: coversDirectory,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -87,6 +97,9 @@ test("Produktionsserver: NextAuth-Login, Session, Logout und öffentliche Katalo
   }
 
   assert.deepEqual(await (await request("/api/auth/session")).json(), {});
+  const writes = ["/api/admin/books", "/api/admin/cd-dvd", "/api/admin/exemplars", "/api/admin/users"];
+  for (const url of writes) assert.equal((await request(url, { method: "POST" })).status, 401);
+  assert.equal((await request(`/api/admin/media/book/${book.rows[0].id}/cover`, { method: "PUT" })).status, 401);
   // Auch richtige Zugangsdaten dürfen die CSRF-Prüfung nicht umgehen.
   await request("/api/auth/callback/credentials", {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -104,8 +117,69 @@ test("Produktionsserver: NextAuth-Login, Session, Logout und öffentliche Katalo
   assert.equal(session.user.id, admin.id);
   assert.equal(session.user.role, "ADMIN");
   assert.equal(JSON.stringify(session).includes("password"), false);
-  await db.query("UPDATE users SET role = 'USER' WHERE id = $1", [admin.id]);
+  async function adminRequest(url, data, method = "POST") {
+    return request(url, { method, headers: { Origin: base, "Content-Type": "application/json" }, body: JSON.stringify(data) });
+  }
+  const deniedOrigin = await request("/api/admin/books", { method: "POST", headers: { Origin: "https://fremd.example", "Content-Type": "application/json" }, body: "{}" });
+  assert.equal(deniedOrigin.status, 403);
+  assert.equal((await request("/api/admin/books", { method: "POST" })).status, 403);
+  assert.equal((await request("/api/admin/books", { method: "POST", headers: { Origin: base, "Content-Type": "application/json" }, body: "{" })).status, 400);
+  assert.equal((await adminRequest("/api/admin/books", { title: "Ungültig", author: "A", isbn: "falsch" })).status, 400);
+  const createdBook = await adminRequest("/api/admin/books", { title: "Adminbuch", author: "Autor", isbn: "978-0-13-235088-4" });
+  assert.equal(createdBook.status, 201);
+  const managedBook = await createdBook.json();
+  assert.equal(managedBook.isbn, "9780132350884");
+  assert.equal((await adminRequest("/api/admin/books", { title: "Duplikat", author: "A", isbn: managedBook.isbn })).status, 409);
+  assert.equal((await adminRequest(`/api/admin/books/${managedBook.id}`, { title: "Bearbeitet" }, "PATCH")).status, 200);
+  assert.equal((await request(`/api/admin/books/${managedBook.id}`)).status, 200);
+  const discResponse = await adminRequest("/api/admin/cd-dvd", { title: "Musik", media_type: "CD" });
+  assert.equal(discResponse.status, 201);
+  const disc = await discResponse.json();
+  assert.equal((await adminRequest(`/api/admin/cd-dvd/${disc.id}`, { media_type: "DVD" }, "PATCH")).status, 200);
+  assert.equal((await request(`/api/admin/cd-dvd/${disc.id}`)).status, 200);
+  const copyResponse = await adminRequest("/api/admin/exemplars", { inventory_number: "ADMIN-1", location: "A", book_id: managedBook.id });
+  assert.equal(copyResponse.status, 201);
+  const copy = await copyResponse.json();
+  assert.equal((await adminRequest(`/api/admin/exemplars/${copy.id}`, { location: "B" }, "PATCH")).status, 200);
+  assert.equal((await (await request(`/api/admin/exemplars?book_id=${managedBook.id}`)).json()).total, 1);
+  const userResponse = await adminRequest("/api/admin/users", { name: "Neu", email: "neu@example.test", password: "Neues sicheres Passwort!", role: "USER" });
+  assert.equal(userResponse.status, 201);
+  const managedUser = await userResponse.json();
+  assert.equal("password_hash" in managedUser, false);
+  assert.equal((await adminRequest(`/api/admin/users/${managedUser.id}`, { name: "Bearbeitet" }, "PATCH")).status, 200);
+  const usersResponse = await request("/api/admin/users?pageSize=1");
+  assert.equal(usersResponse.status, 200);
+  const users = await usersResponse.json();
+  assert.equal(users.items.length, 1);
+  assert.equal(JSON.stringify(users).includes("password"), false);
+  async function upload(buffer, mime = "image/png") {
+    const data = new FormData();
+    data.set("file", new Blob([buffer], { type: mime }), "../../untrusted-name.png");
+    return request(`/api/admin/media/book/${managedBook.id}/cover`, { method: "PUT", headers: { Origin: base }, body: data });
+  }
+  const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "blue" } }).png().toBuffer();
+  assert.equal((await upload(Buffer.from("kein Bild"))).status, 415);
+  assert.equal((await upload(Buffer.alloc(5 * 1024 * 1024 + 1))).status, 413);
+  const uploaded = await upload(png, "text/plain");
+  assert.equal(uploaded.status, 200);
+  const firstCover = (await uploaded.json()).cover_image_path;
+  const cover = await request(`/api/covers/${firstCover}`);
+  assert.equal(cover.status, 200);
+  assert.equal(cover.headers.get("content-type"), "image/webp");
+  const secondCover = (await (await upload(png)).json()).cover_image_path;
+  assert.notEqual(firstCover, secondCover);
+  assert.equal((await request(`/api/covers/${firstCover}`)).status, 404);
+  assert.equal((await request(`/api/admin/media/book/${managedBook.id}/cover`, { method: "DELETE", headers: { Origin: base } })).status, 200);
+  assert.equal((await request(`/api/covers/${secondCover}`)).status, 404);
+  assert.equal((await adminRequest(`/api/admin/users/${admin.id}`, { role: "USER" }, "PATCH")).status, 200);
   assert.equal((await (await request("/api/auth/session")).json()).user.role, "USER");
+  for (const url of writes) assert.equal((await adminRequest(url, {})).status, 403);
+  for (const url of [`/api/admin/books/${managedBook.id}`, `/api/admin/cd-dvd/${disc.id}`, `/api/admin/exemplars/${copy.id}`, `/api/admin/users/${managedUser.id}`]) {
+    assert.equal((await adminRequest(url, {}, "PATCH")).status, 403);
+  }
+  assert.equal((await request("/api/admin/users")).status, 403);
+  assert.equal((await upload(png)).status, 403);
+  assert.equal((await request(`/api/admin/media/book/${managedBook.id}/cover`, { method: "DELETE", headers: { Origin: base } })).status, 403);
 
   const csrf = await (await request("/api/auth/csrf")).json();
   await request("/api/auth/signout", {

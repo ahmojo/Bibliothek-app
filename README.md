@@ -35,6 +35,15 @@ Die Migrationen richten die Tabelle ein und erhalten vorhandene Nachrichten.
 
 `lib/db.js` verwendet einen gemeinsamen `pg.Pool`, beim Entwickeln auch über
 Modul-Neuladungen hinweg. `server-only` verhindert Client-Imports des Datenbankcodes.
+Die Services in `lib/media.mjs`, `exemplars.mjs`, `users.mjs` und `covers.mjs`
+erhalten `db` als Parameter. Dadurch laufen dieselben Funktionen im Server und
+in isolierten Datenbanktests, ohne Next.js-Kontext. Route Handler prüfen HTTP-
+Eingaben und Berechtigungen. Mehrteilige Änderungen verwenden über `transaction()`
+in `lib/postgres.mjs` denselben Client, auch wenn ein Pool übergeben wurde.
+
+IDs bleiben überall BIGINT-Strings und werden über `lib/validation.mjs` geprüft.
+`lib/postgres.mjs` konfiguriert den DATE-Parser für App und Tests auf `YYYY-MM-DD`;
+die Bibliothekszeitzone ist `Europe/Zurich`. So entstehen keine Datumsverschiebungen.
 
 Die Daten liegen im Docker-Volume `postgres_data` und bleiben auch nach
 `docker compose down` erhalten.
@@ -55,15 +64,34 @@ Medien mit vorhandenen Exemplaren lassen sich nicht löschen.
 
 Pflichttexte dürfen auch nicht leer oder nur Leerraum sein. ISBN-10 und ISBN-13
 werden auf ihre Prüfziffer geprüft; Bindestriche und Leerzeichen zählen für
-Suche und Eindeutigkeit nicht mit. Gespeicherte ISBNs werden dabei nicht verändert.
+Suche und Eindeutigkeit nicht mit. Die Verwaltungs-API speichert ISBNs normalisiert;
+bereits vorhandene Werte werden nicht automatisch umgeschrieben.
 Erscheinungsjahre sind optional und liegen zwischen 1 und dem nächsten Kalenderjahr.
 Indizes auf den Fremdschlüsseln unterstützen Zuordnungen und Referenzprüfungen.
+Administratoren können Medien erstellen und bearbeiten sowie Inventarnummer,
+Standort und Medienzuordnung eines Exemplars ändern. Hat ein Exemplar bereits
+Ausleihen, wird eine andere Medienzuordnung mit 409 abgelehnt; die Historie bleibt erhalten.
+
+Cover liegen als Dateien unter `storage/covers/` (von Git ausgeschlossen).
+`COVER_UPLOAD_DIR` in `.env.local` kann ein anderes dauerhaftes Verzeichnis angeben.
+Sichere es zusammen mit der Datenbank. Beide Medientabellen speichern nur die
+Kennung in `cover_image_path`; öffentlich abrufbar ist `/api/covers/{Kennung}`.
+`sharp` 0.35.5 prüft und dekodiert JPG, PNG und WebP bis 5 MiB und 20 Megapixel.
+Bilder werden ohne Metadaten als WebP mit zufälliger UUID gespeichert; Dateiname
+und MIME-Angabe des Uploads werden nicht vertraut. Animierte Bilder sind nicht erlaubt.
+Bei DB-Fehlern wird die neue Datei entfernt, alte Cover erst nach erfolgreicher
+Änderung ersetzt oder gelöscht. Ein Prozessabsturz oder fehlende Löschrechte können
+verwaiste Dateien hinterlassen; Upload-Dateien werden nicht in den Build eingebunden.
 
 ### Benutzer und Ausleihen
 
 `users` enthält `id`, `name`, `email`, `password_hash` und `role`. Alle Felder sind
 Pflicht; ein CHECK erlaubt nur `USER` und `ADMIN`. Ein UNIQUE-Index auf
 `LOWER(email)` macht E-Mails unabhängig von der Schreibweise eindeutig.
+Die Admin-API erstellt, listet und bearbeitet Benutzer inklusive Rolle und optional
+neuem Passwort. Antworten enthalten ausschliesslich `id`, `name`, `email` und `role`.
+Die Datenbankwerte bleiben `USER` und `ADMIN`; spätere Oberflächen zeigen
+„Benutzer“ und „Administrator“.
 
 `ausleihe` verbindet jeweils einen Benutzer und ein Exemplar über Fremdschlüssel.
 `loan_date` und `due_date` sind Pflichtdaten, `return_date` ist optional. Fälligkeit
@@ -135,6 +163,30 @@ Ausleihe mit `return_date IS NULL` existiert. Die Antworten werden nicht gecacht
 und enthalten keine Ausleiherdaten. Validierungsfehler ergeben 400, unbekannte
 Medien 404, interne Fehler eine allgemeine JSON-Antwort mit 500.
 
+### Verwaltungs-API
+
+Alle folgenden Endpunkte verlangen eine aktuelle ADMIN-Session. Schreibende
+Anfragen benötigen den Header `Origin` passend zu `NEXTAUTH_URL` (Schutz vor
+fremden Webseiten). JSON-Anfragen verwenden `Content-Type: application/json`.
+`PATCH` ändert nur übergebene Felder; unbekannte oder leere Änderungsobjekte ergeben 400.
+
+| Endpunkt | Methode und Zweck |
+| --- | --- |
+| `/api/admin/books` | POST: Buch erstellen |
+| `/api/admin/books/{id}` | GET: abrufen, PATCH: bearbeiten |
+| `/api/admin/cd-dvd` | POST: CD/DVD erstellen |
+| `/api/admin/cd-dvd/{id}` | GET: abrufen, PATCH: bearbeiten |
+| `/api/admin/exemplars` | POST: anlegen; GET mit `book_id` oder `cd_dvd_id`: Exemplare samt Verfügbarkeit |
+| `/api/admin/exemplars/{id}` | PATCH: bearbeiten; beim Medienwechsel die bisherige Zuordnung explizit auf `null` setzen |
+| `/api/admin/users` | POST: Benutzer mit `name`, `email`, `password`, `role` erstellen; GET: auflisten |
+| `/api/admin/users/{id}` | PATCH: Name, E-Mail, Passwort oder Rolle ändern |
+| `/api/admin/media/{type}/{id}/cover` | PUT: Cover hochladen/ersetzen, DELETE: entfernen; `type=book\|cd\|dvd` |
+
+Listen verwenden `page` und `pageSize` wie der Katalog. Cover-Uploads verwenden
+`multipart/form-data` mit genau einer Datei im Feld `file`. Fehlende Anmeldung
+ergibt 401, fehlende Berechtigung 403, Duplikate oder ungültige Referenzen 409,
+zu grosse Dateien 413 und nicht lesbare beziehungsweise unerlaubte Formate 415.
+
 ### Migrationen
 
 `npm run db:migrate` lädt `.env.local` über `@next/env` und führt SQL-Dateien aus
@@ -156,6 +208,7 @@ Transaktionsbefehle enthalten und müssen innerhalb einer Transaktion ausführba
 | `006_create_setup_check.sql` | Verbindungsprüfung; Testnachricht nur bei leerer Tabelle |
 | `007_validate_media_and_users.sql` | Pflichttexte, ISBN-Prüfung, Erscheinungsjahre und Fremdschlüsselindizes |
 | `008_align_isbn_whitespace.sql` | Unicode-Leerzeichen wie in JavaScript behandeln und ISBN-Index erneuern |
+| `009_add_cover_image_paths.sql` | Optionale Cover-Kennung für Bücher und CDs/DVDs |
 
 Die Validierungsmigrationen melden Datenkonflikte mit Datensatz-IDs und brechen
 ab. Bestandsdaten werden weder automatisch korrigiert noch gelöscht.
@@ -164,9 +217,10 @@ ab. Bestandsdaten werden weder automatisch korrigiert noch gelöscht.
 
 - `npm run lint` prüft den Code mit ESLint.
 - `npm run build` erstellt den Produktionsbuild; `npm run start` startet ihn.
-- `npm run test:backend` prüft Passwörter, ADMIN-Setup, Rollen und Katalogabfragen.
+- `npm run test:backend` prüft Passwörter, Rollen, Katalog und Verwaltung sowie
+  ID-/DATE-Typen, Ausleihhistorien-Schutz und Cover inklusive Fehlerfällen und Dateipersistenz.
 - `npm run test:http` prüft nach dem Build Startseite, Login, CSRF, Sessions,
-  Logout und Katalog-Endpunkte mit einem eigenen Produktionsserver.
+  Logout, Katalog, Verwaltungsrechte und Cover-Uploads mit einem eigenen Produktionsserver.
 - `npm run test:db` prüft Migrationen, Constraints, Datenpersistenz und Cleanup.
 - Next.js stoppen: `Ctrl+C`. Datenbank stoppen: `docker compose down`.
 
@@ -177,4 +231,5 @@ und räumen auch nach Fehlern auf. Der HTTP-Test erzeugt ein eigenes Session-Geh
 
 Das Datenbankschema für Medien, Exemplare, Benutzer und Ausleihen ist umgesetzt.
 Passwortverarbeitung, NextAuth und die lesende Katalog-API sind umgesetzt.
-Login-Oberfläche, Medienverwaltung sowie Ausleih- und Rückgabelogik fehlen noch.
+Die Admin-API verwaltet Medien, Cover, Exemplare und Benutzer.
+Login- und Admin-Oberflächen sowie Ausleih- und Rückgabelogik fehlen noch.
